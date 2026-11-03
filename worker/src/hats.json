@@ -1,0 +1,28 @@
+{
+  "drop_rates": {
+    "common": 85,
+    "uncommon": 12,
+    "rare": 2.5,
+    "legendary": 0.5
+  },
+  "venues": {
+    "pizza_party": {
+      "common": ["Participant visor (paper)"],
+      "uncommon": ["\"Team Player\" baseball cap, one size fits none"],
+      "rare": ["\"Employee of the Moment\" foam crown"],
+      "legendary": ["\"I Survived the Reorg\" trucker cap"]
+    },
+    "retirement_community": {
+      "common": ["Complimentary sun visor (plastic)"],
+      "uncommon": ["Golf cap, logo of a sponsor that no longer exists"],
+      "rare": ["Green jacket (loaner, must be returned)"],
+      "legendary": ["Lifetime membership bucket hat"]
+    },
+    "dive_bar": {
+      "common": ["Promotional foam koozie hat"],
+      "uncommon": ["Trucker cap, \"I'd Rather Be Tokenizing\""],
+      "rare": ["Captain's hat from the Christmas party"],
+      "legendary": ["Velvet top hat, origin unknown"]
+    }
+  }
+}

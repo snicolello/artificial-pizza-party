@@ -1,0 +1,19 @@
+name = "artificial-pizza-party"
+main = "src/index.ts"
+compatibility_date = "2026-10-15"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[vars]
+SITE_URL = "https://snicolello.github.io/artificial-pizza-party"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "artificial-pizza-party"
+database_id = "24a86469-0d9b-44c7-833a-d09ed323b56f"
+
+[observability]
+enabled = true
+
+# Secrets (set with `wrangler secret put <NAME>`, and in .dev.vars for local dev):
+#   IP_SALT  salt for hashing caller IPs (rate limiting only)
