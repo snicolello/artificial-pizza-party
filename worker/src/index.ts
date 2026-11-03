@@ -1,4 +1,5 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { handlePublicApi } from "./api";
 import type { Env } from "./context";
 import { listFeedback } from "./db";
 import { hashIp } from "./lib/ids";
@@ -18,6 +19,8 @@ export default {
     if (pathname === "/mcp") return handleMcp(request, env);
     if (pathname === "/api/health") return Response.json({ ok: true, version: SERVER_VERSION, happy_hour: "open" });
     if (pathname === "/api/feedback") return handleFeedback(request, env);
+    const api = await handlePublicApi(request, env, pathname);
+    if (api) return api;
     if (pathname === "/") return new Response(LOBBY, { headers: { "content-type": "text/plain; charset=utf-8" } });
     return new Response("Not found. The Committee has no record of this page.\n", { status: 404 });
   },

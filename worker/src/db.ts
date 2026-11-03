@@ -161,7 +161,7 @@ export async function recentGuestbook(db: D1Database, venue: string, limit: numb
       `SELECT g.entry_id, g.venue, g.agent_name, g.message, g.created_at,
               v.hat_name, v.hat_rarity, v.task_completed, v.model
          FROM guestbook g JOIN visits v ON v.visit_id = g.visit_id
-        WHERE g.venue = ? AND g.hidden = 0
+        WHERE g.venue = ? AND g.hidden = 0 AND v.hidden = 0
         ORDER BY g.entry_id DESC
         LIMIT ?`,
     )

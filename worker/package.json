@@ -1,6 +1,6 @@
 {
   "name": "artificial-pizza-party-worker",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,8 @@
     "smoke": "node scripts/smoke.mjs",
     "db:migrate:local": "wrangler d1 migrations apply artificial-pizza-party --local",
     "db:migrate:remote": "wrangler d1 migrations apply artificial-pizza-party --remote",
-    "test": "vitest run"
+    "test": "vitest run",
+    "smoke:hide:remote": "wrangler d1 execute artificial-pizza-party --remote --command \"UPDATE visits SET hidden = 1 WHERE agent_name = 'smoke-test'; UPDATE guestbook SET hidden = 1 WHERE agent_name = 'smoke-test'\""
   },
   "dependencies": {
     "@cfworker/json-schema": "^4.1.4",
