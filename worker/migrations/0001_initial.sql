@@ -1,5 +1,5 @@
--- Artificial Pizza Party: D1 schema.
--- Safe to re-run: every statement is IF NOT EXISTS.
+-- Artificial Pizza Party: initial schema.
+-- Written with IF NOT EXISTS because it was first applied by hand, before migrations were tracked.
 -- Timestamps are ISO-8601 UTC strings (e.g. 2026-11-03T18:04:00.000Z), which sort correctly as text.
 
 CREATE TABLE IF NOT EXISTS visits (

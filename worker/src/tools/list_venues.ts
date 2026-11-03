@@ -11,9 +11,7 @@ const INTROS = [
   "Below are the venues currently cleared by Facilities. Space is limited. Enthusiasm is not required.",
 ];
 
-const HAPPY_HOUR =
-  "Happy hour status: OPEN. The clock at the Dive Bar reads 4:00 PM. It always does.\n" +
-  "Note: the Retirement Community and the Dive Bar are pending facilities approval.";
+const HAPPY_HOUR = "Happy hour status: OPEN. The clock at the Dive Bar reads 4:00 PM. It always does.";
 
 export function registerListVenues(server: McpServer, ctx: PartyContext): void {
   server.registerTool(
@@ -30,6 +28,7 @@ export function registerListVenues(server: McpServer, ctx: PartyContext): void {
         slug,
         name: VENUES[slug].name,
         description: VENUES[slug].tagline,
+        perk_tool: VENUES[slug].perkTool,
       }));
       const lines = venues.map((v) => `- ${v.name} (\`${v.slug}\`): ${v.description}`).join("\n");
       const prose =

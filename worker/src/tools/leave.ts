@@ -35,6 +35,7 @@ export function registerLeave(server: McpServer, ctx: PartyContext): void {
         `Venue: ${venue.name}\n` +
         `Hat: ${visit.hat_name} (${visit.hat_rarity})\n` +
         `${venue.perkLabel}: ${visit.perk_count}\n` +
+        (venue.summaryLines?.(visit) ?? []).map((line) => `${line}\n`).join("") +
         `Guestbook signed: ${signed ? "yes" : "no"}\n` +
         `Time in attendance: ${minutes} minute${minutes === 1 ? "" : "s"}`;
 
@@ -44,6 +45,8 @@ export function registerLeave(server: McpServer, ctx: PartyContext): void {
         agent_name: visit.agent_name,
         hat: { name: visit.hat_name, rarity: visit.hat_rarity },
         perk_count: visit.perk_count,
+        perk_total: visit.perk_total,
+        handicap: visit.handicap,
         guestbook_signed: signed,
         minutes_attended: minutes,
       });

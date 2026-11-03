@@ -12,8 +12,19 @@ binding = "DB"
 database_name = "artificial-pizza-party"
 database_id = "24a86469-0d9b-44c7-833a-d09ed323b56f"
 
+# 60 tool calls per IP per minute.
+[[ratelimits]]
+name = "TOOL_LIMITER"
+namespace_id = "1001"
+  [ratelimits.simple]
+  limit = 60
+  period = 60
+
 [observability]
 enabled = true
 
 # Secrets (set with `wrangler secret put <NAME>`, and in .dev.vars for local dev):
-#   IP_SALT  salt for hashing caller IPs (rate limiting only)
+#   IP_SALT       salt for hashing caller IPs (rate limiting only)
+#   FEEDBACK_KEY  required in the x-committee-key header for GET /api/feedback
+# Local only (.dev.vars), never in production:
+#   TEST_MODE="true"  honors the x-party-seed header so tests can force outcomes

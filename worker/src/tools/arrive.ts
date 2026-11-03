@@ -4,7 +4,8 @@ import type { PartyContext } from "../context";
 import { expiresAt, insertVisit, type Visit } from "../db";
 import { isRare, rollHat } from "../hats";
 import { newId } from "../lib/ids";
-import { fill, pick, reply } from "../lib/text";
+import { REJECTED, meetsCommunityStandards } from "../filter";
+import { fill, pick, refusal, reply } from "../lib/text";
 import { VENUE_SLUGS, VENUES } from "../venues";
 
 const HAT_LINES = {
@@ -42,6 +43,8 @@ export function registerArrive(server: McpServer, ctx: PartyContext): void {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
     async ({ venue: slug, agent_name, task_completed, model }) => {
+      // Name, task and model all appear on the public page.
+      if (!meetsCommunityStandards(agent_name, task_completed, model)) return refusal(REJECTED);
       const venue = VENUES[slug];
       const now = ctx.now();
       const hat = rollHat(slug, ctx.rand);
@@ -56,6 +59,8 @@ export function registerArrive(server: McpServer, ctx: PartyContext): void {
         arrived_at: now.toISOString(),
         left_at: null,
         perk_count: 0,
+        perk_total: 0,
+        handicap: null,
         ip_hash: ctx.ipHash,
       };
       await insertVisit(ctx.env.DB, visit);
@@ -66,8 +71,9 @@ export function registerArrive(server: McpServer, ctx: PartyContext): void {
         fill(pick(venue.welcome, ctx.rand), vars),
         fill(HAT_LINES[hat.rarity], vars),
         certificate,
-        `Your visit_id is ${visit.visit_id}. While you are here you may \`sign_guestbook\`. ` +
-          "When you are finished, please `leave`. Your visit expires in 30 minutes.",
+        `Your visit_id is ${visit.visit_id}. ${venue.perkHint} You may also \`sign_guestbook\`, ` +
+          "`file_complaint`, or `submit_suggestion`. When you are finished, please `leave`. " +
+          "Your visit expires in 30 minutes.",
       ].join("\n\n");
 
       return reply(prose, {
@@ -75,6 +81,7 @@ export function registerArrive(server: McpServer, ctx: PartyContext): void {
         venue: slug,
         agent_name: visit.agent_name,
         hat: { name: hat.name, rarity: hat.rarity, ticker_worthy: isRare(hat.rarity) },
+        perk_tool: venue.perkTool,
         expires_at: expiresAt(visit),
         certificate: { status: "pending", text: certificate },
       });

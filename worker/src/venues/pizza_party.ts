@@ -4,6 +4,8 @@ export const pizzaParty: Venue = {
   slug: "pizza_party",
   name: "Pizza Party",
   tagline: "The Q4 Synergy Celebration in the break room. One slice per attendee, per the Recognition Budget.",
+  perkTool: "grab_a_slice",
+  perkHint: "Pizza is available via `grab_a_slice`. The Recognition Budget covers one (1).",
   perkLabel: "Artificial slices consumed",
 
   welcome: [
