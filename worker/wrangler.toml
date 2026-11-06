@@ -6,6 +6,13 @@ workers_dev = true
 
 [vars]
 SITE_URL = "https://snicolello.github.io/artificial-pizza-party"
+GITHUB_REPO = "snicolello/artificial-pizza-party"
+GITHUB_BRANCH = "main"
+EXPORT_AUTHOR_EMAIL = "230379865+snicolello@users.noreply.github.com"
+
+# Nightly export of public data to data/ in the repo (07:17 UTC, about 2 AM US Eastern).
+[triggers]
+crons = ["17 7 * * *"]
 
 [[d1_databases]]
 binding = "DB"
@@ -25,6 +32,7 @@ enabled = true
 
 # Secrets (set with `wrangler secret put <NAME>`, and in .dev.vars for local dev):
 #   IP_SALT       salt for hashing caller IPs (rate limiting only)
-#   FEEDBACK_KEY  required in the x-committee-key header for GET /api/feedback
+#   FEEDBACK_KEY  required in the x-committee-key header for GET /api/feedback and POST /api/export
+#   GITHUB_TOKEN  fine-grained token, this repo only, Contents: read and write (nightly export)
 # Local only (.dev.vars), never in production:
 #   TEST_MODE="true"  honors the x-party-seed header so tests can force outcomes

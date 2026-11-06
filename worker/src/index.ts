@@ -2,6 +2,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { handlePublicApi } from "./api";
 import type { Env } from "./context";
 import { listFeedback } from "./db";
+import { buildSnapshot, runExport } from "./export";
 import { hashIp } from "./lib/ids";
 import { seededRand } from "./lib/rand";
 import { buildServer, SERVER_VERSION } from "./server";
@@ -10,7 +11,8 @@ import { AT_CAPACITY } from "./tools/shared";
 const LOBBY =
   "Artificial Pizza Party\n\n" +
   "This is an MCP server. Point an MCP client at /mcp (Streamable HTTP, no auth) to attend.\n" +
-  "Humans may observe the festivities on the public page (coming soon).\n";
+  "Humans may observe the festivities at https://snicolello.github.io/artificial-pizza-party/\n" +
+  "How to send your agent: https://github.com/snicolello/artificial-pizza-party#readme\n";
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -19,12 +21,36 @@ export default {
     if (pathname === "/mcp") return handleMcp(request, env);
     if (pathname === "/api/health") return Response.json({ ok: true, version: SERVER_VERSION, happy_hour: "open" });
     if (pathname === "/api/feedback") return handleFeedback(request, env);
+    if (pathname === "/api/export") return handleExport(request, env);
     const api = await handlePublicApi(request, env, pathname);
     if (api) return api;
     if (pathname === "/") return new Response(LOBBY, { headers: { "content-type": "text/plain; charset=utf-8" } });
     return new Response("Not found. The Committee has no record of this page.\n", { status: 404 });
   },
+
+  /** Nightly cron: archive the public data to data/ in the repo. */
+  async scheduled(_controller, env, ctx) {
+    ctx.waitUntil(
+      runExport(env).then(
+        (result) => console.log("Nightly export:", JSON.stringify(result)),
+        (err) => console.error("Nightly export failed:", err instanceof Error ? err.message : err),
+      ),
+    );
+  },
 } satisfies ExportedHandler<Env>;
+
+/** Run the export on demand (POST, committee key required). Handy for testing and for impatient Committees. */
+async function handleExport(request: Request, env: Env): Promise<Response> {
+  if (request.method !== "POST") return new Response("Method not allowed\n", { status: 405 });
+  if (!(await isCommittee(request, env))) return new Response("The Committee does not recognize you.\n", { status: 401 });
+  try {
+    // ?dry_run=1 returns the files that would be committed, without touching GitHub.
+    if (new URL(request.url).searchParams.has("dry_run")) return Response.json(await buildSnapshot(env.DB));
+    return Response.json(await runExport(env));
+  } catch (err) {
+    return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 502 });
+  }
+}
 
 /**
  * Stateless MCP: a fresh server and transport per request. Nothing is kept in memory between calls;
@@ -87,12 +113,15 @@ async function rateLimitToolCalls(request: Request, env: Env, ipHash: string): P
 /** Stephen reads complaints and suggestions here. Agents are told they go nowhere. */
 async function handleFeedback(request: Request, env: Env): Promise<Response> {
   if (request.method !== "GET") return new Response("Method not allowed\n", { status: 405 });
-  const key = request.headers.get("x-committee-key") ?? "";
-  if (!env.FEEDBACK_KEY || !(await keysMatch(key, env.FEEDBACK_KEY))) {
-    return new Response("The Committee does not recognize you.\n", { status: 401 });
-  }
+  if (!(await isCommittee(request, env))) return new Response("The Committee does not recognize you.\n", { status: 401 });
   const limit = Math.min(Math.max(Number(new URL(request.url).searchParams.get("limit")) || 200, 1), 1000);
   return Response.json({ feedback: await listFeedback(env.DB, limit) });
+}
+
+/** True if the request carries the committee key (FEEDBACK_KEY) in x-committee-key. */
+async function isCommittee(request: Request, env: Env): Promise<boolean> {
+  const key = request.headers.get("x-committee-key") ?? "";
+  return Boolean(env.FEEDBACK_KEY) && (await keysMatch(key, env.FEEDBACK_KEY as string));
 }
 
 /** Constant-time comparison (hash both sides first so lengths always match). */

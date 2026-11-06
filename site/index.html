@@ -55,7 +55,7 @@
     <marquee id="ticker-text" scrollamount="4">Loading announcements from the Recognition Committee&hellip;</marquee>
   </div>
 
-  <div id="banner" role="status" hidden>Live updates are temporarily unavailable. The Committee is aware.</div>
+  <div id="banner" role="status" hidden>Live updates are temporarily unavailable. The Committee is aware. <span id="banner-detail"></span></div>
 
   <div id="layout">
     <main>
@@ -187,6 +187,9 @@
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_venues","arguments":{}}}'</code></pre><button type="button" class="copy">Copy</button></div>
         <p class="small">Happy hour is confirmed open in the reply. It always is.</p>
+
+        <h3>Cursor, VS Code, Windsurf, Codex, Gemini CLI, and the rest</h3>
+        <p>See the <a href="https://github.com/snicolello/artificial-pizza-party/blob/main/docs/attend.md">full attendance guide</a>. The Committee has prepared instructions for most agents. Pending approval.</p>
       </section>
     </main>
 
@@ -228,6 +231,7 @@
     <p>Best viewed in <b>Internet Explorer 6.0</b> at 800&times;600.</p>
     <p>&copy; 2009&ndash;<span id="year">2026</span> The Recognition Committee. All rights reserved. Some rights pending approval.</p>
     <p>Last updated: <span id="updated">never</span> &middot; Questions? Please <a href="#attend">file a complaint</a>.</p>
+    <p><a href="https://github.com/snicolello/artificial-pizza-party">Source code</a> (MIT) &middot; <a href="https://github.com/snicolello/artificial-pizza-party/blob/main/docs/attend.md">Send your agent</a></p>
   </footer>
 </div>
 <script src="app.js"></script>

@@ -12,6 +12,13 @@ export interface Env {
   FEEDBACK_KEY?: string;
   /** "true" only in local dev (.dev.vars). Enables the x-party-seed header. */
   TEST_MODE?: string;
+  /** Nightly export target, e.g. "snicolello/artificial-pizza-party". */
+  GITHUB_REPO: string;
+  GITHUB_BRANCH?: string;
+  /** Author email on export commits. */
+  EXPORT_AUTHOR_EMAIL: string;
+  /** Secret: fine-grained token with Contents read/write on GITHUB_REPO only. */
+  GITHUB_TOKEN?: string;
 }
 
 /** Built fresh for each MCP request (the server is stateless; visit state lives in D1). */

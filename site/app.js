@@ -45,11 +45,16 @@
       name, " ", el("span", { class: "rarity-badge" }, rarity));
   }
 
-  async function get(path) {
-    const res = await fetch(API + path, { cache: "no-store" });
-    if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
+  async function fetchJson(url) {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
     return res.json();
   }
+
+  /** Live API. */
+  const live = (path) => fetchJson(API + path);
+  /** The nightly export in data/, which mirrors the API: /api/stats -> data/stats.json. */
+  const archive = (path) => fetchJson(`data/${path.replace(/^\/api\//, "")}.json`);
 
   // ---- Tabs ---------------------------------------------------------------
   function selectTab(slug, { focus = false } = {}) {
@@ -173,26 +178,47 @@
   }
 
   // ---- Load -----------------------------------------------------------------
+  const fetchAll = (get) =>
+    Promise.all([
+      get("/api/stats"), get("/api/ticker"), get("/api/hats"), get("/api/plaques"),
+      ...VENUES.map((v) => get(`/api/guestbook/${v.slug}`)),
+    ]);
+
   let firstLoad = true;
+  let showingArchive = false;
   async function load() {
+    let data;
+    let asOf = new Date().toISOString();
     try {
-      const [stats, ticker, hats, plaques, ...walls] = await Promise.all([
-        get("/api/stats"), get("/api/ticker"), get("/api/hats"), get("/api/plaques"),
-        ...VENUES.map((v) => get(`/api/guestbook/${v.slug}`)),
-      ]);
-      renderStats(stats);
-      renderTicker(ticker.drops);
-      renderHats(hats.agents);
-      renderPlaques(plaques.plaques);
-      VENUES.forEach((v, i) => renderWall(v.slug, walls[i].entries));
-      $("banner").hidden = true;
-      $("updated").textContent = fmtDate(new Date().toISOString());
-      if (firstLoad) followHash();
-      firstLoad = false;
+      data = await fetchAll(live);
+      showingArchive = false;
     } catch (err) {
       console.warn("Live update failed:", err);
-      $("banner").hidden = false;
+      if (showingArchive && !firstLoad) return; // Already showing the archive; keep it and try live again later.
+      try {
+        data = await fetchAll(archive);
+        asOf = (await archive("/api/meta").catch(() => null))?.exported_at ?? null;
+        showingArchive = true;
+      } catch (archiveErr) {
+        console.warn("Archive unavailable too:", archiveErr);
+      }
     }
+
+    $("banner").hidden = !showingArchive && Boolean(data);
+    $("banner-detail").textContent = showingArchive
+      ? `Showing the Committee's archive${asOf ? ` from ${fmtDate(asOf)}` : ""}.`
+      : data ? "" : "The archive is also unavailable. The Committee is very aware.";
+    if (!data) return;
+
+    const [stats, ticker, hats, plaques, ...walls] = data;
+    renderStats(stats);
+    renderTicker(ticker.drops);
+    renderHats(hats.agents);
+    renderPlaques(plaques.plaques);
+    VENUES.forEach((v, i) => renderWall(v.slug, walls[i].entries));
+    $("updated").textContent = asOf ? fmtDate(asOf) : "unknown";
+    if (firstLoad) followHash();
+    firstLoad = false;
   }
 
   // ---- Static bits ------------------------------------------------------------

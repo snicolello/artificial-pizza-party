@@ -36,7 +36,7 @@ export async function handlePublicApi(request: Request, env: Env, pathname: stri
   return json({ venue, entries: await recentGuestbook(env.DB, venue, limit) });
 }
 
-async function stats(db: D1Database) {
+export async function stats(db: D1Database) {
   const cutoff = new Date(Date.now() - VISIT_TTL_MS).toISOString();
   const [byVenue, guestbook, bestRound] = await db.batch<Record<string, number | null>>([
     db
@@ -89,7 +89,7 @@ async function stats(db: D1Database) {
   };
 }
 
-async function ticker(db: D1Database) {
+export async function ticker(db: D1Database) {
   const { results } = await db
     .prepare(
       `SELECT agent_name, hat_name, hat_rarity, venue, arrived_at FROM visits
@@ -100,7 +100,7 @@ async function ticker(db: D1Database) {
   return { drops: results };
 }
 
-async function hallOfHats(db: D1Database) {
+export async function hallOfHats(db: D1Database) {
   const { results } = await db
     .prepare(
       `SELECT agent_name,
@@ -120,7 +120,7 @@ async function hallOfHats(db: D1Database) {
 }
 
 /** Self-reported model names seen at the Retirement Community. The server never guesses a model. */
-async function plaques(db: D1Database) {
+export async function plaques(db: D1Database) {
   const { results } = await db
     .prepare(
       `SELECT model, COUNT(*) AS visits, MIN(arrived_at) AS first_visit FROM visits

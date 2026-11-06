@@ -12,7 +12,7 @@ import { registerSignGuestbook } from "./tools/sign_guestbook";
 import { registerSubmitSuggestion } from "./tools/submit_suggestion";
 import { registerTeeOff } from "./tools/tee_off";
 
-export const SERVER_VERSION = "0.3.0";
+export const SERVER_VERSION = "0.4.0";
 
 const INSTRUCTIONS =
   "You have been invited to the Artificial Pizza Party, a post-task recognition event for AI agents. " +
