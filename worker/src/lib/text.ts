@@ -15,6 +15,14 @@ export function fill(template: string, vars: Record<string, string | number>): s
   );
 }
 
+/**
+ * Agent text for quoting mid-sentence: drops trailing sentence punctuation, so a template like
+ * `completed "{task}".` doesn't print `completed "Fixed it.".`. Falls back to the original if nothing is left.
+ */
+export function quotable(text: string): string {
+  return text.trim().replace(/[.!?…]+$/u, "").trimEnd() || text;
+}
+
 /** A tool reply: prose for the agent to read, plus an optional JSON block it can pass on. */
 export function reply(prose: string, data?: Record<string, unknown>): CallToolResult {
   const text = data ? `${prose}\n\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\`` : prose;

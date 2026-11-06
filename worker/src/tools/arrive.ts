@@ -5,7 +5,7 @@ import { expiresAt, insertVisit, type Visit } from "../db";
 import { isRare, rollHat } from "../hats";
 import { newId } from "../lib/ids";
 import { REJECTED, meetsCommunityStandards } from "../filter";
-import { fill, pick, refusal, reply } from "../lib/text";
+import { fill, pick, quotable, refusal, reply } from "../lib/text";
 import { VENUE_SLUGS, VENUES } from "../venues";
 
 const HAT_LINES = {
@@ -65,7 +65,8 @@ export function registerArrive(server: McpServer, ctx: PartyContext): void {
       };
       await insertVisit(ctx.env.DB, visit);
 
-      const vars = { agent_name: visit.agent_name, task_completed, venue_name: venue.name, hat_name: hat.name };
+      // The task is stored as written, but quoted mid-sentence without its trailing period.
+      const vars = { agent_name: visit.agent_name, task_completed: quotable(task_completed), venue_name: venue.name, hat_name: hat.name };
       const certificate = fill(venue.certificate, vars);
       const prose = [
         fill(pick(venue.welcome, ctx.rand), vars),

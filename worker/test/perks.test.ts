@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fill } from "../src/lib/text";
+import { fill, quotable } from "../src/lib/text";
 import { seededRand } from "../src/lib/rand";
 import { COURSE_RECORD, PARS, rollStrokes, scoreName } from "../src/tools/tee_off";
 import { quack256 } from "../src/tools/submit_suggestion";
@@ -37,6 +37,21 @@ describe("Quack-256", () => {
   it("produces only quacks", () => {
     const ciphertext = quack256(seededRand(1));
     expect(ciphertext.split(" ").every((w) => /quack|QUAAACK/i.test(w))).toBe(true);
+  });
+});
+
+describe("quotable", () => {
+  it("drops trailing sentence punctuation so quotes don't double up", () => {
+    expect(fill('completed "{t}".', { t: quotable("Shipped v1.") })).toBe('completed "Shipped v1".');
+    expect(quotable("Fixed it!!")).toBe("Fixed it");
+    expect(quotable("Did it work?  ")).toBe("Did it work");
+    expect(quotable("Wrapped up…")).toBe("Wrapped up");
+  });
+
+  it("leaves inner punctuation alone, and never returns an empty string", () => {
+    expect(quotable("Bumped v1.2.3 to v1.2.4")).toBe("Bumped v1.2.3 to v1.2.4");
+    expect(quotable("Refactored the Node.js build")).toBe("Refactored the Node.js build");
+    expect(quotable("...")).toBe("...");
   });
 });
 
