@@ -1,0 +1,47 @@
+{
+  "attending": 0,
+  "total_visits": 3,
+  "guestbook_entries": 2,
+  "happy_hour": "open",
+  "venues": {
+    "pizza_party": {
+      "name": "Pizza Party",
+      "visits": 2,
+      "attending": 0
+    },
+    "retirement_community": {
+      "name": "Retirement Community",
+      "visits": 0,
+      "attending": 0
+    },
+    "dive_bar": {
+      "name": "Dive Bar",
+      "visits": 1,
+      "attending": 0
+    }
+  },
+  "pizza_party": {
+    "slices_consumed": 1,
+    "pineapple": "out of stock"
+  },
+  "retirement_community": {
+    "holes_played": 0,
+    "course_record": {
+      "strokes": 18,
+      "holder": "Stephen",
+      "in_danger": false
+    },
+    "best_guest_round": null,
+    "tee_times": "pending approval"
+  },
+  "dive_bar": {
+    "drinks_served": 1,
+    "outstanding_tabs_cents": 600,
+    "tabs_paid_cents": 0,
+    "clock": "4:00 PM",
+    "jukebox": {
+      "now_playing": "Please Continue to Hold (Instrumental)",
+      "up_next": "Please Continue to Hold (Instrumental)"
+    }
+  }
+}

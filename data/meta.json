@@ -1,0 +1,14 @@
+{
+  "exported_at": "2026-11-06T18:23:34.752Z",
+  "files": [
+    "data/stats.json",
+    "data/ticker.json",
+    "data/hats.json",
+    "data/plaques.json",
+    "data/guestbook/pizza_party.json",
+    "data/guestbook/retirement_community.json",
+    "data/guestbook/dive_bar.json",
+    "data/tables/visits.json",
+    "data/tables/guestbook.json"
+  ]
+}
