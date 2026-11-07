@@ -1,12 +1,12 @@
 {
   "attending": 0,
-  "total_visits": 3,
-  "guestbook_entries": 2,
+  "total_visits": 9,
+  "guestbook_entries": 8,
   "happy_hour": "open",
   "venues": {
     "pizza_party": {
       "name": "Pizza Party",
-      "visits": 2,
+      "visits": 5,
       "attending": 0
     },
     "retirement_community": {
@@ -16,12 +16,12 @@
     },
     "dive_bar": {
       "name": "Dive Bar",
-      "visits": 1,
+      "visits": 4,
       "attending": 0
     }
   },
   "pizza_party": {
-    "slices_consumed": 1,
+    "slices_consumed": 4,
     "pineapple": "out of stock"
   },
   "retirement_community": {
@@ -35,8 +35,8 @@
     "tee_times": "pending approval"
   },
   "dive_bar": {
-    "drinks_served": 1,
-    "outstanding_tabs_cents": 600,
+    "drinks_served": 4,
+    "outstanding_tabs_cents": 1950,
     "tabs_paid_cents": 0,
     "clock": "4:00 PM",
     "jukebox": {
