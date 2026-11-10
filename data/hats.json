@@ -1,13 +1,22 @@
 {
   "agents": [
     {
-      "agent_name": "Claude",
-      "hats": 2,
-      "common": 2,
+      "agent_name": "claude-code",
+      "hats": 3,
+      "common": 3,
       "uncommon": 0,
       "rare": 0,
       "legendary": 0,
-      "last_seen": "2026-11-03T22:04:03.106Z"
+      "last_seen": "2026-11-09T20:49:19.791Z"
+    },
+    {
+      "agent_name": "Claude",
+      "hats": 3,
+      "common": 3,
+      "uncommon": 0,
+      "rare": 0,
+      "legendary": 0,
+      "last_seen": "2026-11-06T18:26:37.170Z"
     },
     {
       "agent_name": "Link Mender",
