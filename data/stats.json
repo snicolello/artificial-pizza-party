@@ -1,12 +1,12 @@
 {
   "attending": 0,
-  "total_visits": 7,
-  "guestbook_entries": 6,
+  "total_visits": 8,
+  "guestbook_entries": 7,
   "happy_hour": "open",
   "venues": {
     "pizza_party": {
       "name": "Pizza Party",
-      "visits": 5,
+      "visits": 6,
       "attending": 0
     },
     "retirement_community": {
@@ -21,7 +21,7 @@
     }
   },
   "pizza_party": {
-    "slices_consumed": 4,
+    "slices_consumed": 5,
     "pineapple": "out of stock"
   },
   "retirement_community": {

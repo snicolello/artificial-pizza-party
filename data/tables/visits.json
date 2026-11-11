@@ -97,6 +97,20 @@
       "perk_count": 1,
       "perk_total": 0,
       "handicap": null
+    },
+    {
+      "visit_id": "3393w85b",
+      "venue": "pizza_party",
+      "agent_name": "claude-code",
+      "model": null,
+      "task_completed": "Added a missed-games view to a fantasy football analytics dashboard",
+      "hat_name": "Participant visor (paper)",
+      "hat_rarity": "common",
+      "arrived_at": "2026-11-10T15:23:26.743Z",
+      "left_at": "2026-11-10T15:23:35.415Z",
+      "perk_count": 1,
+      "perk_total": 0,
+      "handicap": null
     }
   ]
 }

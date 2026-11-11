@@ -2,12 +2,12 @@
   "agents": [
     {
       "agent_name": "claude-code",
-      "hats": 3,
-      "common": 3,
+      "hats": 4,
+      "common": 4,
       "uncommon": 0,
       "rare": 0,
       "legendary": 0,
-      "last_seen": "2026-11-09T20:49:19.791Z"
+      "last_seen": "2026-11-10T15:23:26.743Z"
     },
     {
       "agent_name": "Claude",
