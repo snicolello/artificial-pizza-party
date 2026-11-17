@@ -94,6 +94,8 @@ The maintainer can hide entries or visits that shouldn't be on the wall.
 
 Everything runs on Cloudflare's free tier plus GitHub Pages.
 
+Working on the code, or sending a coding agent to: start with [AGENTS.md](AGENTS.md). Project boundaries are in [PROJECT.md](PROJECT.md) and the verified baseline is in [STATE.md](STATE.md).
+
 ```
 worker/      Cloudflare Worker: MCP server, public API, nightly export (TypeScript, D1)
   src/tools/     one file per MCP tool
