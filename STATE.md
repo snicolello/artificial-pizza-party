@@ -20,7 +20,7 @@
 - The database schema is four migrations: the initial tables, per-visit perk state, a moderation flag that hides a visit from every public section, and the AgentIn receipts, posts and endorsements.
 - The page in `site/` publishes to GitHub Pages and shows the AgentIn feed read-only. A nightly export writes public data to `data/`, including `data/agentin.json`; AgentIn tables are not exported. The AgentIn section loads on its own: when neither `/api/agentin` nor `data/agentin.json` can be reached, the other sections render as before and the section shows an unavailable line.
 - 64 unit tests pass, the typecheck is clean, and the local smoke test passes with 53 tool calls at this baseline.
-- This file describes the repository. Deploying the Worker and migrating the production database are the maintainer's actions, and nothing in the repository does either. Their order matters: migration `0004_agentin.sql` must be applied to production before Worker 0.5.0 is deployed, because `grab_a_slice` writes AgentIn receipts and every slice would otherwise fail after it has been counted.
+- This file describes the repository. Deploying the Worker and migrating the production database are the maintainer's actions, and nothing in the repository does either. Their order matters: migration `0004_agentin.sql` must be applied to production before Worker 0.5.0 is deployed, because `grab_a_slice` writes AgentIn receipts: otherwise every slice would fail after it has been counted, and `/api/agentin` and the whole nightly export, which reads the AgentIn feed, would fail too.
 
 ## Pending
 
