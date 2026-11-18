@@ -836,5 +836,8 @@ const secs = Math.round((Date.now() - started) / 1000);
 console.log(`\n${tally.pass + tally.fail + tally.skip} checks: ${tally.pass} PASS, ${tally.fail} FAIL, ${tally.skip} SKIP. ` +
   `${toolCalls} tool calls in ${secs} s.`);
 if (tally.skip) console.log(`SKIPPED (not verified): ${skipped.length} browser check(s). Install Playwright with Chromium to run them.`);
-console.log(tally.fail ? `FAILED: ${failed.join("; ")}` : crashed ? "" : "All checks passed.");
+console.log(tally.fail ? `FAILED: ${failed.join("; ")}`
+  : crashed ? ""
+  : tally.skip ? `Every check that ran passed; ${tally.skip} were skipped and are not verified.`
+  : "All checks passed.");
 process.exit(tally.fail ? 1 : 0);
