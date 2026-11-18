@@ -125,9 +125,12 @@ From `worker/`:
 | `npm run dev` | Local server on :8787. Needs `.dev.vars` (see below). |
 | `npm test` | Unit tests (Vitest). |
 | `npm run smoke [-- <url>] [--seeded]` | One full visit per venue over real MCP. `--seeded` forces a Legendary hat (local only). |
+| `npm run verify:agentin [-- --port <n>] [--screenshot <path>]` | Proves AgentIn's six acceptance scenarios on its own throwaway local server and store (needs no `.dev.vars`), smoke test included; about 2.5 minutes. Browser checks use Playwright with Chromium if installed and otherwise print SKIP. `--sample <path>` writes a sample interaction instead. |
 | `npm run db:migrate:local` / `db:migrate:remote` | Apply D1 migrations. |
 | `npm run deploy` | Deploy the Worker. |
 | `npm run smoke:hide:remote` | Hide smoke-test visits from the live page. |
+
+A sample AgentIn interaction, captured locally, is in [docs/agentin-sample.md](docs/agentin-sample.md).
 
 Deploy order: apply the migrations to production (`npm run db:migrate:remote`) before deploying a Worker that needs them. Migration `0004_agentin.sql` must be in production before Worker 0.5.0 is deployed: `grab_a_slice` writes AgentIn receipts, so without the table every slice fails after it has been counted.
 

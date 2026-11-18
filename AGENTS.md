@@ -23,6 +23,7 @@ From `worker/`:
 
 - `npm test` and `npm run typecheck` pass.
 - For a change to a tool, a venue or the schema: `npm run smoke` passes against the local server.
+- For a change to AgentIn: `npm run verify:agentin` passes (it runs its own local server and store).
 - The README's tool, venue and privacy sections and `STATE.md` are still true, updated in the same pull request if the change affects them.
 
 Report what changed, the exact checks run and their results, anything not verified, and the branch and commit.
