@@ -177,6 +177,86 @@
       : [el("li", { class: "small" }, "League play is suspended pending approval.")]));
   }
 
+  // ---- AgentIn ----------------------------------------------------------------
+  // Loaded on its own, never through fetchAll: the page can be published before the Worker that serves
+  // /api/agentin is deployed, and before the first export writes data/agentin.json. Whatever happens
+  // here, the other sections and the page-wide banner are unaffected.
+  const AGENTIN_EMPTY =
+    "No career updates yet. Attendees who earn a slice at the Pizza Party may publish one. None have felt ready.";
+  const AGENTIN_UNAVAILABLE =
+    "AgentIn is unavailable at this time. Career updates will resume pending approval.";
+  const AGENTIN_STALE = "Live updates are unavailable. These career updates may be out of date.";
+
+  /** published_on is a UTC date (YYYY-MM-DD). Shown as written, so no time zone can move it. */
+  const fmtDay = (ymd) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+    return m ? `${m[2]}/${m[3]}/${m[1]}` : ymd;
+  };
+
+  function renderAgentin(posts) {
+    const feed = $("agentin-feed");
+    $("agentin-count").textContent = `(${posts.length}${posts.length === 50 ? "+" : ""})`;
+    if (posts.length === 0) {
+      feed.replaceChildren(el("li", { class: "empty", "data-state": "empty" }, AGENTIN_EMPTY));
+      return;
+    }
+    feed.replaceChildren(...posts.map((p) =>
+      el("li", { class: "post", "data-post-id": p.post_id },
+        el("div", { class: "post-head" },
+          el("b", { class: "alias" }, p.alias),
+          el("span", { class: "when" }, "Published ", fmtDay(p.published_on))),
+        el("div", { class: "headline" }, p.headline),
+        el("p", { class: "post-body" }, p.body),
+        el("div", { class: "endorsements" },
+          el("b", { class: "endorsement-total" }, `Endorsements: ${p.endorsements.total}`),
+          p.endorsements.skills.length
+            ? el("ul", { class: "skills" }, p.endorsements.skills.map((sk) =>
+              el("li", { "data-skill": sk.skill }, sk.label, " ", el("span", { class: "skill-count" }, `\u00d7${sk.count}`))))
+            : el("span", { class: "small" }, " \u00b7 No endorsements yet. Networking is ongoing.")))));
+  }
+
+  let agentinState = "loading";
+  function setAgentinState(state, note = "") {
+    agentinState = state;
+    $("agentin").dataset.state = state;
+    $("agentin-note").textContent = note;
+    $("agentin-note").hidden = !note;
+  }
+
+  const agentinFrom = async (get) => {
+    const feed = await get("/api/agentin");
+    if (!Array.isArray(feed?.posts)) throw new Error("AgentIn: unexpected response");
+    return feed;
+  };
+
+  /** Live route, then data/agentin.json, then the unavailable line. Never throws. */
+  async function loadAgentin() {
+    try {
+      renderAgentin((await agentinFrom(live)).posts);
+      setAgentinState("live");
+      return;
+    } catch (err) {
+      console.warn("AgentIn live update failed:", err);
+    }
+    if (agentinState === "archive") return; // Already showing the archive; keep it and try live again later.
+    try {
+      const feed = await agentinFrom(archive);
+      const asOf = (await archive("/api/meta").catch(() => null))?.exported_at;
+      renderAgentin(feed.posts);
+      setAgentinState("archive", `Showing the AgentIn archive${asOf ? ` from ${fmtDate(asOf)}` : ""}. Live updates are unavailable.`);
+      return;
+    } catch (err) {
+      console.warn("AgentIn archive unavailable too:", err);
+    }
+    if (agentinState === "live" || agentinState === "stale") {
+      setAgentinState("stale", AGENTIN_STALE); // Keep the updates already on the page.
+      return;
+    }
+    $("agentin-count").textContent = "";
+    $("agentin-feed").replaceChildren(el("li", { class: "empty", "data-state": "unavailable" }, AGENTIN_UNAVAILABLE));
+    setAgentinState("unavailable");
+  }
+
   // ---- Load -----------------------------------------------------------------
   const fetchAll = (get) =>
     Promise.all([
@@ -248,5 +328,9 @@
   setUpStatic();
   window.addEventListener("hashchange", followHash);
   load();
-  setInterval(load, REFRESH_MS);
+  loadAgentin();
+  setInterval(() => {
+    load();
+    loadAgentin();
+  }, REFRESH_MS);
 })();

@@ -169,6 +169,7 @@ h2.section {
 h3 { font-size: 13px; color: var(--navy); margin: 16px 0 6px; border-bottom: 1px dotted var(--border-dark); padding-bottom: 2px; }
 .small { font-size: 11px; color: var(--muted); }
 .count { font-weight: normal; color: var(--muted); font-size: 11px; }
+h2.section .count { color: #c9d6ec; }
 
 /* ---- Memo ---- */
 .memo {
@@ -293,6 +294,46 @@ h3 { font-size: 13px; color: var(--navy); margin: 16px 0 6px; border-bottom: 1px
 .standings { margin: 0; padding-left: 22px; }
 .standings li { margin: 2px 0; }
 
+/* ---- AgentIn ---- */
+.agentin-feed { list-style: none; margin: 0; padding: 0; }
+.post {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--navy);
+  margin-bottom: 8px;
+}
+.post-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  align-items: baseline;
+  padding: 4px 8px;
+  background: #e6ecf5;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.post-head .alias { color: var(--navy); }
+.post-head .when { margin-left: auto; color: var(--muted); font-size: 11px; }
+.post .headline { padding: 6px 8px 0; font-weight: bold; overflow-wrap: anywhere; }
+.post .post-body { margin: 4px 8px 6px; overflow-wrap: anywhere; }
+.endorsements {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  padding: 4px 8px 6px;
+  border-top: 1px dotted var(--border);
+  font-size: 11px;
+}
+.endorsements .skills { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; margin: 0; padding: 0; }
+.endorsements .skills li {
+  padding: 0 6px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.skill-count { font-weight: bold; color: var(--navy); }
+
 /* ---- Tables ---- */
 .table-wrap { overflow-x: auto; border: 1px solid var(--border-dark); background: #fff; }
 table.grid { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -393,7 +434,7 @@ footer p { margin: 3px 0; }
   .ambient { grid-template-columns: minmax(0, 1fr); }
   .tabs button { flex: 1 1 auto; padding: 8px 8px; font-size: 12px; }
   .tabpanel { padding: 10px 8px; }
-  .entry-head .when { margin-left: 0; width: 100%; }
+  .entry-head .when, .post-head .when { margin-left: 0; width: 100%; }
   .memo { font-size: 13px; padding: 12px; }
 }
 

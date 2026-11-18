@@ -6,6 +6,9 @@
 //
 // The files mirror the public API, so the page can fall back to them when the API is down:
 //   /api/stats -> data/stats.json, /api/guestbook/pizza_party -> data/guestbook/pizza_party.json, etc.
+// AgentIn is published only as its feed (/api/agentin -> data/agentin.json). Its tables are never
+// exported under data/tables/, so no public file joins a post to the visit that made it.
+import { agentinFeed } from "./agentin/feed";
 import { hallOfHats, plaques, stats, ticker } from "./api";
 import type { Env } from "./context";
 import { recentGuestbook } from "./db";
@@ -24,6 +27,7 @@ export async function buildSnapshot(db: D1Database): Promise<Record<string, stri
     "data/ticker.json": await ticker(db),
     "data/hats.json": await hallOfHats(db),
     "data/plaques.json": await plaques(db),
+    "data/agentin.json": await agentinFeed(db),
   };
   for (const venue of VENUE_SLUGS) {
     files[`data/guestbook/${venue}.json`] = { venue, entries: await recentGuestbook(db, venue, 100) };
