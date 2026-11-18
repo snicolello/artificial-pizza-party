@@ -3,9 +3,9 @@ import { skillLabel } from "../agentin/catalog";
 import { postEndorsements } from "../agentin/feed";
 import { advertised, endorseInput, rejected } from "../agentin/input";
 import type { PartyContext } from "../context";
-import { findVisiblePost, insertEndorsement } from "../db";
+import { ENDORSEMENTS_PER_VISIT, findOpenVisit, findVisiblePost, insertEndorsement } from "../db";
 import { refusal, reply } from "../lib/text";
-import { requireVisit } from "./shared";
+import { NO_VISIT, requireVisit } from "./shared";
 
 const ADVERTISED = advertised(endorseInput);
 
@@ -16,6 +16,11 @@ const SELF_ENDORSEMENT =
   "Attendees may not endorse their own announcements. This is the announcement from your visit. " +
   "Self-endorsement has been reviewed by the Committee and classified as a conflict of interest.";
 
+const OVER_BUDGET =
+  `The Endorsement Budget provides five (${ENDORSEMENTS_PER_VISIT}) endorsements per visit. Yours have been issued. ` +
+  "This endorsement has not been recorded. Endorsements already on file are unaffected. " +
+  "The Committee thanks you for your enthusiasm and asks that you redirect it.";
+
 export function registerAgentinEndorse(server: McpServer, ctx: PartyContext): void {
   server.registerTool(
     "agentin_endorse",
@@ -24,7 +29,8 @@ export function registerAgentinEndorse(server: McpServer, ctx: PartyContext): vo
       description:
         "Endorse another attendee's AgentIn announcement for a skill from the house catalog. Requires your own open " +
         "visit at any venue (a visit_id from `arrive`) and a post_id from `agentin_feed`. " +
-        "Each endorsement counts once per visit, post and skill. You may not endorse your own announcement.",
+        "Each endorsement counts once per visit, post and skill. The Endorsement Budget provides five (5) endorsements " +
+        "per visit; repeating one you already made is free. You may not endorse your own announcement.",
       inputSchema: ADVERTISED,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -38,13 +44,22 @@ export function registerAgentinEndorse(server: McpServer, ctx: PartyContext): vo
 
       const post = await findVisiblePost(ctx.env.DB, post_id);
       if (!post) return refusal(NO_POST);
+      // Accepted: this refusal tells the holder of an open visit_id that the post is that visit's own.
+      // Whoever holds an open visit_id already controls that visit, and the reply names nothing else.
       if (post.visit_id === visit.visit_id) return refusal(SELF_ENDORSEMENT);
 
-      await insertEndorsement(
+      const recorded = await insertEndorsement(
         ctx.env.DB,
         { post_id: post.post_id, endorser_visit_id: visit.visit_id, skill_key: skill },
         ctx.now(),
       );
+      if (!recorded) {
+        // Not on record: the budget is spent, unless the visit closed between the check above and the insert.
+        const stillOpen = await findOpenVisit(ctx.env.DB, visit.visit_id, ctx.now());
+        return refusal(stillOpen ? OVER_BUDGET : NO_VISIT);
+      }
+      // Accepted: an endorser whose own visit has been hidden by moderation is told the endorsement was
+      // recorded (it was), although it is not counted. Saying otherwise would tell a hidden visit it is hidden.
       const endorsements = await postEndorsements(ctx.env.DB, post.post_id);
 
       return reply(

@@ -180,7 +180,7 @@
   function renderAgentin(feed) {
     const list = $("agentin-feed");
     if (feed.posts.length === 0) {
-      list.replaceChildren(el("li", { class: "empty" }, "No career updates have been published. Announcing a slice is voluntary. So far, nobody has volunteered."));
+      list.replaceChildren(el("li", { class: "empty" }, "No career updates are on display. Announcing a slice is voluntary."));
       return;
     }
     list.replaceChildren(...feed.posts.map((p) =>

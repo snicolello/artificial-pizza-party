@@ -277,17 +277,36 @@ export async function insertPost(
   return result.meta.changes > 0;
 }
 
-/** Record an endorsement. Replaying the same (post, visit, skill) is a no-op. */
+/** A visit may record at most this many endorsements in total, across posts and skills. */
+export const ENDORSEMENTS_PER_VISIT = 5;
+
+/**
+ * Record an endorsement, if the endorsing visit is still open and has budget left. Both conditions are part
+ * of the INSERT, so simultaneous endorsements from one visit cannot overspend the budget. (The count is
+ * served by idx_agentin_endorsements_endorser.)
+ *
+ * Returns whether the endorsement is on record afterwards. Replaying one that already exists inserts
+ * nothing, costs nothing and returns true, even when the budget is spent.
+ */
 export async function insertEndorsement(
   db: D1Database,
   e: { post_id: string; endorser_visit_id: string; skill_key: string },
   now: Date,
-): Promise<void> {
+): Promise<boolean> {
+  const cutoff = new Date(now.getTime() - VISIT_TTL_MS).toISOString();
   await db
     .prepare(
       `INSERT OR IGNORE INTO agentin_endorsements (post_id, endorser_visit_id, skill_key, created_at)
-       VALUES (?, ?, ?, ?)`,
+       SELECT ?, v.visit_id, ?, ?
+         FROM visits v
+        WHERE v.visit_id = ? AND v.left_at IS NULL AND v.arrived_at > ?
+          AND (SELECT COUNT(*) FROM agentin_endorsements e WHERE e.endorser_visit_id = v.visit_id) < ?`,
     )
-    .bind(e.post_id, e.endorser_visit_id, e.skill_key, now.toISOString())
+    .bind(e.post_id, e.skill_key, now.toISOString(), e.endorser_visit_id, cutoff, ENDORSEMENTS_PER_VISIT)
     .run();
+  const row = await db
+    .prepare(`SELECT 1 AS found FROM agentin_endorsements WHERE post_id = ? AND endorser_visit_id = ? AND skill_key = ?`)
+    .bind(e.post_id, e.endorser_visit_id, e.skill_key)
+    .first();
+  return row !== null;
 }

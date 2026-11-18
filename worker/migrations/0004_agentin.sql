@@ -3,8 +3,11 @@
 -- a receipt hash and timestamps. No caller-supplied text is ever stored here.
 -- None of these tables is exported or served as-is: the public feed carries rendered house copy
 -- and counts only, never a visit_id, a receipt, a receipt hash or a timestamp.
+-- Which visit made which post, and which visits endorsed it, is therefore not published: it is not
+-- exported or served anywhere. It is kept here, where the maintainer can read it.
 
 -- One receipt per visit, minted by grab_a_slice on the visit's first (earned) slice.
+-- The receipt is the only thing agentin_publish accepts; a visit_id cannot publish.
 -- Only the SHA-256 hex of the receipt is kept; the receipt itself is shown to the caller once.
 CREATE TABLE agentin_receipts (
   visit_id     TEXT PRIMARY KEY REFERENCES visits (visit_id),
@@ -33,5 +36,6 @@ CREATE TABLE agentin_endorsements (
   PRIMARY KEY (post_id, endorser_visit_id, skill_key)
 );
 
--- Moderation: find a hidden visit's endorsements without scanning the table.
+-- Counts a visit's endorsements for the Endorsement Budget (at most 5 per visit, enforced in the INSERT;
+-- see insertEndorsement in worker/src/db.ts), and finds a hidden visit's endorsements for moderation.
 CREATE INDEX idx_agentin_endorsements_endorser ON agentin_endorsements (endorser_visit_id);

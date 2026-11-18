@@ -268,6 +268,25 @@ async function connect({ name = `kestrel-client ${MARKER}`, version = MARKER, he
   return { client, call, close };
 }
 
+/**
+ * POST a hand-written JSON-RPC body to /mcp. For the one thing an MCP client cannot send: a field literally
+ * named "__proto__", which only survives in JSON text. `calls` is how many tool calls the body holds.
+ */
+async function rawMcp(bodyText, calls = 1) {
+  for (let i = 0; i < calls; i++) await pace();
+  const res = await fetch(assertLocal(`${server.base}/mcp`), {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "x-kestrel-context": MARKER },
+    body: bodyText,
+  });
+  const body = await res.text();
+  let parsed = null;
+  try { parsed = JSON.parse(body); } catch { /* reported by the caller */ }
+  return { status: res.status, body, json: parsed };
+}
+const REJECTED_START = "AgentIn was unable to process this submission.";
+const isRejection = (r) => r?.isError === true && text(r).startsWith(REJECTED_START);
+
 const created = { visits: [], receipts: [] };
 async function arriveAs(c, venue, role) {
   const agentName = `${role} ${MARKER}`; // at most 40 characters, so the marker is never cut off
@@ -411,7 +430,7 @@ async function writeTranscript(file) {
   const a = await connect(opts);
   const slicer = json(await a.call("arrive", { venue: "pizza_party", agent_name: "release-bot", task_completed: "Cut release 4.2.0" }))?.visit_id;
   const receipt = json(await a.call("grab_a_slice", { visit_id: slicer }))?.slice_receipt;
-  const postId = json(await a.call("agentin_publish", { visit_id: slicer }))?.post_id;
+  const postId = json(await a.call("agentin_publish", { slice_receipt: receipt }))?.post_id;
   await a.close();
 
   const b = await connect(opts);
@@ -431,7 +450,7 @@ async function writeTranscript(file) {
   const redact = (s) => s.split(receipt).join("<slice_receipt>");
   const titles = [
     "The attendee arrives at the Pizza Party", "It earns a slice (the receipt is issued here, once)",
-    "It chooses to publish", "A second connection reads the feed. No visit is needed",
+    "It chooses to publish, with the receipt", "A second connection reads the feed. No visit is needed",
     "That second attendee arrives at the Dive Bar", "It endorses the post", "It repeats the endorsement. The count stays at one",
     "The feed afterwards",
   ];
@@ -447,8 +466,8 @@ async function writeTranscript(file) {
     "It runs against a throwaway local database, so the ids below exist nowhere else. The slice receipt is replaced " +
     "with `<slice_receipt>`; a real one is 24 characters and is shown once. Aliases, wording, hats and toppings are " +
     "drawn at random, so a new run reads differently.\n\n" +
-    "Things to look for: the publish and feed replies carry no visit_id and no receipt; every word of the post is " +
-    "house copy; the replayed endorsement leaves the count at one.\n\n";
+    "Things to look for: publishing takes the slice receipt and nothing else; the publish and feed replies carry " +
+    "no visit_id and no receipt; every word of the post is house copy; the replayed endorsement leaves the count at one.\n\n";
   writeFileSync(resolve(process.cwd(), file), intro + body);
   console.log(`Sample interaction written to ${file} (${steps.length} tool calls, receipt redacted).`);
 }
@@ -477,7 +496,7 @@ async function main() {
   const receiptA = grabbedA.receipt;
   check(!grabbedA.result.isError && ID24.test(receiptA ?? ""), "the earned slice comes with a slice_receipt");
   await c.call("sign_guestbook", { visit_id: A, message: `${GUESTBOOK.publisher} ${MARKER}` });
-  await c.call("agentin_publish", { visit_id: A }); // The reply is deliberately thrown away.
+  await c.call("agentin_publish", { slice_receipt: receiptA }); // The reply is deliberately thrown away.
   await c.close();
 
   const stored = postsFor(A);
@@ -499,8 +518,8 @@ async function main() {
   check(!leftA.isError && !afterClose.isError && json(afterClose)?.post_id === storedPostId,
     "after the visit has closed, the receipt still returns the same post_id");
   const closedById = await c.call("agentin_publish", { visit_id: A });
-  check(closedById.isError === true && !text(closedById).includes(storedPostId),
-    "after the visit has closed, its visit_id alone is refused and reveals no post");
+  check(isRejection(closedById) && !text(closedById).includes(storedPostId) && !text(closedById).includes(A),
+    "agentin_publish with a visit_id is rejected as an unexpected field, and reveals no post");
   await c.close();
 
   const reader = await connect();
@@ -515,8 +534,11 @@ async function main() {
   scenario(2);
   c = await connect();
   const B = await arriveAs(c, "pizza_party", "concurrent");
-  await grab(c, B);
-  const [p1, p2] = await Promise.all([c.call("agentin_publish", { visit_id: B }), c.call("agentin_publish", { visit_id: B })]);
+  const receiptB = (await grab(c, B)).receipt;
+  const [p1, p2] = await Promise.all([
+    c.call("agentin_publish", { slice_receipt: receiptB }),
+    c.call("agentin_publish", { slice_receipt: receiptB }),
+  ]);
   const postB = json(p1)?.post_id;
   check(!p1.isError && !p2.isError && ID12.test(postB ?? "") && json(p2)?.post_id === postB,
     `two simultaneous publishes resolve to the same post_id (${json(p1)?.status} / ${json(p2)?.status})`);
@@ -527,7 +549,7 @@ async function main() {
   for (let i = 0; i < 2; i++) {
     const visit = await arriveAs(seeded, "pizza_party", "twin");
     const slice = await grab(seeded, visit);
-    const post = json(await seeded.call("agentin_publish", { visit_id: visit }));
+    const post = json(await seeded.call("agentin_publish", { slice_receipt: slice.receipt }));
     twins.push({ visit, topping: slice.data?.topping, post });
   }
   const [C, D] = twins;
@@ -572,11 +594,15 @@ async function main() {
   const quiet = await connect();
   const G = await arriveAs(quiet, "pizza_party", "quiet");
   const grabbedG = await grab(quiet, G);
+  // visit_ids are public (the export lists them, open visits included), so one must not be able to publish.
+  const quietById = await quiet.call("agentin_publish", { visit_id: G });
   const feedAfterQuiet = await readFeed(quiet);
   const quietRows = sql(store, `SELECT COUNT(*) AS n FROM agentin_posts WHERE visit_id = ${sqlId(G)};
     SELECT COUNT(*) AS n FROM agentin_receipts WHERE visit_id = ${sqlId(G)}`);
   check(ID24.test(grabbedG.receipt ?? "") && quietRows[1][0]?.n === 1 && quietRows[0][0]?.n === 0,
     "a visit that earned a slice and never opted in has no post");
+  check(isRejection(quietById) && postsFor(G).length === 0,
+    "agentin_publish with the visit_id of that open, sliced, unpublished visit is rejected and creates nothing");
   check(feedAfterQuiet.feed?.posts?.length === 4 && feed3.feed?.posts?.length === 4, "the feed is unchanged by that slice (still 4 posts)");
   await quiet.close();
 
@@ -584,13 +610,26 @@ async function main() {
   scenario(4);
   const editor = await connect();
   const H = await arriveAs(editor, "pizza_party", "editor");
-  await grab(editor, H);
-  const withMessage = await editor.call("agentin_publish", { visit_id: H, message: MARKER });
+  const receiptH = (await grab(editor, H)).receipt;
+  const withMessage = await editor.call("agentin_publish", { slice_receipt: receiptH, message: MARKER });
   check(withMessage.isError === true, "agentin_publish with an unexpected `message` field is rejected");
   check(containsAny(text(withMessage), [MARKER, "message"]).length === 0, "the rejection repeats neither the marker nor the field's name");
-  const withMarkerKey = await editor.call("agentin_publish", { visit_id: H, [MARKER]: "true" });
+  const withMarkerKey = await editor.call("agentin_publish", { slice_receipt: receiptH, [MARKER]: "true" });
   check(withMarkerKey.isError === true && containsAny(text(withMarkerKey), [MARKER]).length === 0,
     "a field whose name is the marker is rejected the same way");
+  // A field literally named "__proto__" has to be written into the JSON by hand: no JS client would serialize it.
+  const protoArgs = `{"slice_receipt":"${receiptH}","__proto__":{"message":"${MARKER}"}}`;
+  const protoCall = (id) => `{"jsonrpc":"2.0","id":${id},"method":"tools/call","params":{"name":"agentin_publish","arguments":${protoArgs}}}`;
+  const single = await rawMcp(protoCall(41));
+  check(single.status === 200 && single.json?.id === 41 && isRejection(single.json?.result) && containsAny(single.body, [MARKER, "__proto__", "message"]).length === 0,
+    'raw HTTP: agentin_publish whose arguments carry a literal "__proto__" field is rejected, without echo');
+  const batch = await rawMcp(`[${protoCall(42)},{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"agentin_publish","arguments":{"slice_receipt":"${receiptH}"}}}]`, 2);
+  check(batch.status === 200 && Array.isArray(batch.json) && batch.json.length === 2 && batch.json.map((m) => m.id).join() === "42,43" &&
+    batch.json.every((m) => isRejection(m.result)) && containsAny(batch.body, [MARKER]).length === 0,
+    "raw HTTP: in a batch holding such a call, nothing runs and every tool call in it gets the rejection");
+  const control = await rawMcp(`{"jsonrpc":"2.0","id":44,"method":"tools/call","params":{"name":"agentin_feed","arguments":{}}}`);
+  check(control.status === 200 && control.json?.id === 44 && control.json?.result?.isError !== true && /Welcome to AgentIn/.test(text(control.json?.result ?? {})),
+    "raw HTTP control: a well-formed call sent the same way is served");
   check(postsFor(H).length === 0, "no post was created by the rejected calls");
   const endorseExtra = await editor.call("agentin_endorse", { visit_id: H, post_id: storedPostId, skill: "synergy", note: MARKER });
   const freeSkill = await editor.call("agentin_endorse", { visit_id: H, post_id: storedPostId, skill: MARKER });

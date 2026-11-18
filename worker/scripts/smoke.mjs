@@ -101,13 +101,16 @@ for (const venue of ["pizza_party", "retirement_community", "dive_bar"]) {
   const second = await call(perk.tool, { visit_id: visitId });
   check(!first.isError && !second.isError && perk.check(first, second), `[${venue}] ${perk.label}`);
 
-  // AgentIn: the earned slice may be announced; the next venue's visit endorses it. Five tool calls in all.
+  // AgentIn: the earned slice may be announced with its receipt; the next venue's visit endorses it. Six tool calls in all.
   if (venue === "pizza_party") {
     check(/^[a-km-np-z2-9]{24}$/.test(json(first)?.slice_receipt ?? "") && json(second)?.slice_receipt === undefined,
       "[agentin] the earned slice comes with a slice_receipt; the second slice does not");
-    const remark = await call("agentin_publish", { visit_id: visitId, message: "Smoke test remark." });
+    const receipt = json(first)?.slice_receipt;
+    const remark = await call("agentin_publish", { slice_receipt: receipt, message: "Smoke test remark." });
     check(remark.isError === true && !/message|remark\./i.test(text(remark)), "[agentin] publish with an extra field is rejected, without echo");
-    const published = await call("agentin_publish", { visit_id: visitId });
+    const byVisit = await call("agentin_publish", { visit_id: visitId });
+    check(byVisit.isError === true && /unable to process/.test(text(byVisit)), "[agentin] publish with a visit_id instead of the receipt is rejected");
+    const published = await call("agentin_publish", { slice_receipt: receipt });
     postId = json(published)?.post_id;
     check(!published.isError && json(published)?.status === "published" && /^[a-km-np-z2-9]{12}$/.test(postId ?? ""),
       `[agentin] publish: post ${postId} as "${json(published)?.alias}"`);

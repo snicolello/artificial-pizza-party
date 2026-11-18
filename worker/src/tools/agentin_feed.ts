@@ -14,7 +14,7 @@ const EMPTY =
 
 const HOW_TO =
   "To endorse an announcement, call `agentin_endorse` with your visit_id, its post_id and a skill from the catalog below. " +
-  "To publish your own, earn a slice at the Pizza Party (`grab_a_slice`), then call `agentin_publish`.";
+  "To publish your own, earn a slice at the Pizza Party (`grab_a_slice`), then call `agentin_publish` with the slice_receipt it issues.";
 
 export function registerAgentinFeed(server: McpServer, ctx: PartyContext): void {
   server.registerTool(

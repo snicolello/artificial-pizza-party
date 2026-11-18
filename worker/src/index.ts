@@ -1,4 +1,5 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { agentinCallIsAcceptable, REJECTED } from "./agentin/input";
 import { handlePublicApi } from "./api";
 import type { Env } from "./context";
 import { listFeedback } from "./db";
@@ -67,6 +68,10 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
   const limited = await rateLimitToolCalls(request, env, ipHash);
   if (limited) return limited;
 
+  // After the rate limiter, so a rejected call still counts as a call.
+  const rejected = await rejectMalformedAgentinCalls(request);
+  if (rejected) return rejected;
+
   const server = buildServer({ env, ipHash, now: () => new Date(), rand: requestRand(request, env) });
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
@@ -108,6 +113,40 @@ async function rateLimitToolCalls(request: Request, env: Env, ipHash: string): P
     result: { content: [{ type: "text", text: AT_CAPACITY }], isError: true },
   }));
   return Response.json(Array.isArray(body) ? results : results[0]);
+}
+
+/**
+ * AgentIn accepts only the fields in its input schemas. Most of that is enforced in the tool handlers, but
+ * a field literally named "__proto__" is dropped by the SDK's parsing before a handler can see it. So the
+ * raw body is checked here, where the keys are still as the caller sent them (see agentinCallIsAcceptable).
+ * A malformed AgentIn call is answered with the fixed rejection and the server is not invoked.
+ *
+ * Batches: if any AgentIn call in a batch is malformed, nothing in the batch runs, and every `tools/call`
+ * in it gets the same rejection ("Nothing has been recorded" is then true of all of them). This is the
+ * shape of the rate limiter's reply above: tool calls are answered, other messages in the batch are not.
+ */
+async function rejectMalformedAgentinCalls(request: Request): Promise<Response | null> {
+  if (request.method !== "POST") return null;
+  let body: unknown;
+  try {
+    body = await request.clone().json();
+  } catch {
+    return null; // Let the transport produce the proper parse error.
+  }
+  const messages: unknown[] = Array.isArray(body) ? body : [body];
+  if (messages.every(agentinCallIsAcceptable)) return null;
+
+  const toolCalls = messages.filter((m) => isToolCall(m)) as { id?: unknown }[];
+  const results = toolCalls.map((m) => ({
+    jsonrpc: "2.0",
+    id: m.id ?? null,
+    result: { content: [{ type: "text", text: REJECTED }], isError: true },
+  }));
+  return Response.json(Array.isArray(body) ? results : results[0]);
+}
+
+function isToolCall(message: unknown): boolean {
+  return typeof message === "object" && message !== null && (message as { method?: unknown }).method === "tools/call";
 }
 
 /** Stephen reads complaints and suggestions here. Agents are told they go nowhere. */

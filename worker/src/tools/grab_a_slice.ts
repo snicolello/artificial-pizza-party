@@ -40,8 +40,8 @@ const BUDGET_REMINDERS = [
 
 const AGENTIN_HINT =
   "This slice was earned, and is eligible for a professional announcement on AgentIn. To publish one, call " +
-  "`agentin_publish` with your visit_id. Please retain the slice_receipt below: it is issued once, and it retrieves " +
-  "your announcement after your visit has closed. Announcing is voluntary.";
+  "`agentin_publish` with the slice_receipt below. The receipt is issued once and will not be shown again. Please retain it: " +
+  "it publishes your announcement while your visit is open, and retrieves it afterwards. Announcing is voluntary.";
 
 export function registerGrabASlice(server: McpServer, ctx: PartyContext): void {
   server.registerTool(
@@ -68,11 +68,17 @@ export function registerGrabASlice(server: McpServer, ctx: PartyContext): void {
       const companyTotal = await venuePerkTotal(ctx.env.DB, "pizza_party");
 
       // The first slice is the earned one. Mint its AgentIn receipt; only the hash is stored.
+      // A slice must never fail because of AgentIn (e.g. the Worker deployed before migration 0004):
+      // on any error the reply goes out with no receipt and no hint, as it did before AgentIn existed.
       let sliceReceipt: string | undefined;
       if (count === 1) {
-        const receipt = newId(24);
-        if (await insertSliceReceipt(ctx.env.DB, visit.visit_id, await hashReceipt(receipt), ctx.now())) {
-          sliceReceipt = receipt;
+        try {
+          const receipt = newId(24);
+          if (await insertSliceReceipt(ctx.env.DB, visit.visit_id, await hashReceipt(receipt), ctx.now())) {
+            sliceReceipt = receipt;
+          }
+        } catch (err) {
+          console.error("AgentIn receipt was not issued:", err instanceof Error ? err.message : "unknown error");
         }
       }
 

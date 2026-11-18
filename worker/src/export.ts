@@ -8,7 +8,8 @@
 //   /api/stats -> data/stats.json, /api/guestbook/pizza_party -> data/guestbook/pizza_party.json, etc.
 //
 // AgentIn is exported only as its public feed (/api/agentin -> data/agentin.json). The agentin_* tables
-// are never exported: they hold the link between a post and its visit, and that link is private.
+// are never exported: they hold the link between a post and its visit. That link is not published:
+// it is not exported or served anywhere. It stays in the database, where the maintainer can read it.
 import { agentinFeed } from "./agentin/feed";
 import { hallOfHats, plaques, stats, ticker } from "./api";
 import type { Env } from "./context";

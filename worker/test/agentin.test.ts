@@ -1,5 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import {
   ALIASES,
@@ -26,6 +25,7 @@ import {
   VISIT_ID_PATTERN,
 } from "../src/agentin/input";
 import {
+  ENDORSEMENTS_PER_VISIT,
   findPostByVisit,
   findVisiblePost,
   insertEndorsement,
@@ -34,6 +34,7 @@ import {
   visitIdForReceipt,
 } from "../src/db";
 import { newId } from "../src/lib/ids";
+import { memoryD1 } from "./helpers/memory-d1";
 
 const MARKER = "ZEBRA-MARKER-7731";
 const VISIT = "abcdefgh";
@@ -107,27 +108,30 @@ describe("AgentIn input", () => {
 
   it("rejects malformed ids", () => {
     for (const bad of ["", "abcdefg", "abcdefghi", "abcdefgl", "abcdefgo", "abcdefg0", "abcdefg1", "ABCDEFGH", " abcdefgh", "abcdefgh\n"]) {
-      expect(publishInput.safeParse({ visit_id: bad }).success, JSON.stringify(bad)).toBe(false);
+      expect(endorseInput.safeParse({ visit_id: bad, post_id: POST, skill: "synergy" }).success, JSON.stringify(bad)).toBe(false);
     }
-    expect(publishInput.safeParse({ slice_receipt: VISIT }).success).toBe(false);
-    expect(publishInput.safeParse({ visit_id: RECEIPT }).success).toBe(false);
+    for (const bad of ["", VISIT, RECEIPT.slice(1), `${RECEIPT}a`, RECEIPT.replace("a", "l"), RECEIPT.toUpperCase(), ` ${RECEIPT}`, `${RECEIPT}\n`]) {
+      expect(publishInput.safeParse({ slice_receipt: bad }).success, JSON.stringify(bad)).toBe(false);
+    }
     expect(endorseInput.safeParse({ visit_id: VISIT, post_id: VISIT, skill: "synergy" }).success).toBe(false);
   });
 
   it("accepts exactly the expected fields", () => {
-    expect(publishInput.safeParse({ visit_id: VISIT }).success).toBe(true);
     expect(publishInput.safeParse({ slice_receipt: RECEIPT }).success).toBe(true);
-    expect(publishInput.safeParse({ visit_id: VISIT, slice_receipt: RECEIPT }).success).toBe(true);
     expect(endorseInput.safeParse({ visit_id: VISIT, post_id: POST, skill: "synergy" }).success).toBe(true);
     expect(feedInput.safeParse({}).success).toBe(true);
   });
 
   it("rejects unexpected fields, wrong types and missing fields", () => {
-    expect(publishInput.safeParse({ visit_id: VISIT, message: MARKER }).success).toBe(false);
-    expect(publishInput.safeParse({ visit_id: VISIT, alias: "valued_contributor" }).success).toBe(false);
-    expect(publishInput.safeParse({ visit_id: 12345678 }).success).toBe(false);
-    expect(publishInput.safeParse({ visit_id: null }).success).toBe(false);
-    expect(publishInput.safeParse([VISIT]).success).toBe(false);
+    // A visit_id cannot publish: visit_ids are public, the receipt is not.
+    expect(publishInput.safeParse({ visit_id: VISIT }).success).toBe(false);
+    expect(publishInput.safeParse({ visit_id: VISIT, slice_receipt: RECEIPT }).success).toBe(false);
+    expect(publishInput.safeParse({}).success).toBe(false);
+    expect(publishInput.safeParse({ slice_receipt: RECEIPT, message: MARKER }).success).toBe(false);
+    expect(publishInput.safeParse({ slice_receipt: RECEIPT, alias: "valued_contributor" }).success).toBe(false);
+    expect(publishInput.safeParse({ slice_receipt: 12345678 }).success).toBe(false);
+    expect(publishInput.safeParse({ slice_receipt: null }).success).toBe(false);
+    expect(publishInput.safeParse([RECEIPT]).success).toBe(false);
     expect(endorseInput.safeParse({ visit_id: VISIT, post_id: POST }).success).toBe(false);
     expect(endorseInput.safeParse({ visit_id: VISIT, post_id: POST, skill: MARKER }).success).toBe(false);
     expect(endorseInput.safeParse({ visit_id: VISIT, post_id: POST, skill: "synergy", note: MARKER }).success).toBe(false);
@@ -146,8 +150,9 @@ describe("AgentIn input", () => {
     expect(loose.safeParse({ message: MARKER }).success).toBe(true);
     const json = JSON.parse(JSON.stringify(loose.meta()));
     expect(json.additionalProperties).toBe(false);
-    expect(Object.keys(json.properties)).toEqual(["visit_id", "slice_receipt"]);
-    expect(json.properties.visit_id.pattern).toBe(VISIT_ID_PATTERN.source);
+    expect(Object.keys(json.properties)).toEqual(["slice_receipt"]);
+    expect(json.required).toEqual(["slice_receipt"]);
+    expect(json.properties.slice_receipt.pattern).toBe(SLICE_RECEIPT_PATTERN.source);
     expect(advertised(endorseInput).meta()?.required).toEqual(["visit_id", "post_id", "skill"]);
   });
 
@@ -206,23 +211,6 @@ describe("AgentIn feed shaping", () => {
 });
 
 // --- The SQL, against the real migrations, through a minimal D1 lookalike over node:sqlite. ---
-function memoryD1(): { db: D1Database; raw: DatabaseSync } {
-  const raw = new DatabaseSync(":memory:");
-  const dir = new URL("../migrations/", import.meta.url);
-  for (const file of readdirSync(dir).sort()) raw.exec(readFileSync(new URL(file, dir), "utf8"));
-  const statement = (sql: string, params: (string | number | null)[] = []) => ({
-    bind: (...next: (string | number | null)[]) => statement(sql, next),
-    first: async () => raw.prepare(sql).get(...params) ?? null,
-    all: async () => ({ results: raw.prepare(sql).all(...params) }),
-    run: async () => ({ meta: { changes: Number(raw.prepare(sql).run(...params).changes) } }),
-  });
-  const db = {
-    prepare: (sql: string) => statement(sql),
-    batch: async (statements: { all: () => Promise<unknown> }[]) => Promise.all(statements.map((s) => s.all())),
-  };
-  return { db: db as unknown as D1Database, raw };
-}
-
 describe("AgentIn store", () => {
   const NOW = new Date("2026-11-18T12:00:00.000Z");
   const arrive = (raw: DatabaseSync, visitId: string, opts: { venue?: string; slices?: number; left?: boolean; arrived?: string } = {}) =>
@@ -304,6 +292,30 @@ describe("AgentIn store", () => {
     expect(feed.posts.map((p) => p.post_id)).toEqual(["postpostbbbb"]);
     expect(await findVisiblePost(db, "postpostaaaa")).toBeNull();
     expect((await findVisiblePost(db, "postpostbbbb"))?.visit_id).toBe("bbbbbbbb");
+  });
+
+  it("records at most five endorsements per visit, only while the visit is open; a replay is free", async () => {
+    const { db, raw } = memoryD1();
+    for (const id of ["aaaaaaaa", "cccccccc"]) arrive(raw, id);
+    arrive(raw, "dddddddd", { left: true });
+    arrive(raw, "eeeeeeee", { arrived: "2026-11-18T11:00:00.000Z" });
+    await insertPost(db, post("aaaaaaaa", "postpostaaaa"), NOW);
+    const endorse = (visitId: string, skill: string) =>
+      insertEndorsement(db, { post_id: "postpostaaaa", endorser_visit_id: visitId, skill_key: skill }, NOW);
+
+    expect(ENDORSEMENTS_PER_VISIT).toBe(5);
+    expect(await endorse("dddddddd", "synergy")).toBe(false);
+    expect(await endorse("eeeeeeee", "synergy")).toBe(false);
+    // Six at once from one visit: the budget is part of the INSERT, so exactly five land.
+    const six = await Promise.all(SKILL_KEYS.slice(0, 6).map((skill) => endorse("cccccccc", skill)));
+    expect(six.filter(Boolean)).toHaveLength(5);
+    const count = () => (raw.prepare("SELECT COUNT(*) AS n FROM agentin_endorsements").get() as { n: number }).n;
+    expect(count()).toBe(5);
+    expect(await endorse("cccccccc", SKILL_KEYS[0])).toBe(true); // already on record
+    expect(await endorse("cccccccc", SKILL_KEYS[7])).toBe(false);
+    expect(count()).toBe(5);
+    const plan = raw.prepare("EXPLAIN QUERY PLAN SELECT COUNT(*) FROM agentin_endorsements WHERE endorser_visit_id = ?").all("cccccccc");
+    expect(JSON.stringify(plan)).toContain("idx_agentin_endorsements_endorser");
   });
 
   it("keeps visit text and visit ids out of the records and the feed", async () => {

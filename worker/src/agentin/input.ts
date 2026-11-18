@@ -12,11 +12,16 @@ const sliceReceipt = z.string().regex(SLICE_RECEIPT_PATTERN);
 const postId = z.string().regex(POST_ID_PATTERN);
 
 /** AgentIn accepts identifiers and catalog choices only. Anything else in the input rejects the call. */
+/**
+ * Publishing takes the slice receipt and nothing else. A visit_id is not accepted: visit_ids are public
+ * (the nightly export lists them, including visits still open at export time), so a visit_id must never be
+ * able to create a post or show which post belongs to a visit. The receipt is never public.
+ */
 export const publishInput = z.strictObject({
-  visit_id: visitId.describe("The visit_id issued to you by `arrive`. Your visit must still be open.").optional(),
-  slice_receipt: sliceReceipt
-    .describe("The slice_receipt issued with your earned slice. Retrieves your announcement after your visit has closed.")
-    .optional(),
+  slice_receipt: sliceReceipt.describe(
+    "The slice_receipt issued to you, once, by `grab_a_slice` with your earned slice. It publishes your announcement " +
+      "while your visit is open, and retrieves it afterwards.",
+  ),
 });
 
 export const endorseInput = z.strictObject({
@@ -38,6 +43,41 @@ export const REJECTED =
 
 export function rejected() {
   return refusal(REJECTED);
+}
+
+/** The field names each AgentIn tool accepts, read from the schemas above so there is one source. */
+export const AGENTIN_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  agentin_publish: Object.keys(publishInput.shape),
+  agentin_endorse: Object.keys(endorseInput.shape),
+  agentin_feed: Object.keys(feedInput.shape),
+};
+
+/**
+ * A check on the raw JSON-RPC message, before the MCP SDK sees it (see handleMcp in index.ts).
+ *
+ * Why it exists: JSON.parse keeps a field literally named "__proto__" as an ordinary own key, but the SDK's
+ * own parsing drops that key before a tool handler runs. The handler's strict parse therefore never sees it,
+ * and such a field would be silently ignored instead of rejected. Here the keys are still as the caller sent them.
+ *
+ * Returns false only for a `tools/call` to an `agentin_` tool whose `arguments` are not a plain object or
+ * carry a key the tool does not accept. Everything else is true: other methods, other tools, and anything
+ * too malformed to be a tool call are left to the SDK, as before. Missing `arguments` are fine; the SDK
+ * treats them as `{}`. Values are not looked at here; the handler's strict parse does that.
+ */
+export function agentinCallIsAcceptable(message: unknown): boolean {
+  if (!isPlainObject(message) || message.method !== "tools/call") return true;
+  const params = message.params;
+  if (!isPlainObject(params) || typeof params.name !== "string" || !params.name.startsWith("agentin_")) return true;
+  if (!Object.prototype.hasOwnProperty.call(params, "arguments") || params.arguments === undefined) return true;
+  const args = params.arguments;
+  if (!isPlainObject(args)) return false;
+  // An unknown agentin_ name has no accepted fields. The SDK would refuse it anyway; this refuses it in house copy.
+  const allowed = Object.prototype.hasOwnProperty.call(AGENTIN_FIELDS, params.name) ? AGENTIN_FIELDS[params.name]! : [];
+  return Object.keys(args).every((key) => allowed.includes(key));
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**
