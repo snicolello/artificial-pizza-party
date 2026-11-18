@@ -1,4 +1,4 @@
-// End-to-end smoke test over real MCP: one full visit per venue, plus the edges.
+// End-to-end smoke test over real MCP: one full visit per venue, an AgentIn announcement, plus the edges.
 //
 // Usage: node scripts/smoke.mjs [mcp-url] [--seeded] [--rate-limit] [--verbose]
 //   mcp-url       default http://localhost:8787/mcp
@@ -52,10 +52,10 @@ if (RATE_LIMIT) {
 
 // --- Discovery -------------------------------------------------------------
 const { tools } = await client.listTools();
-const expectedTools = ["arrive", "file_complaint", "grab_a_slice", "leave", "list_venues", "order_a_drink",
-  "sign_guestbook", "submit_suggestion", "tee_off"];
+const expectedTools = ["agentin_endorse", "agentin_feed", "agentin_publish", "arrive", "file_complaint", "grab_a_slice",
+  "leave", "list_venues", "order_a_drink", "sign_guestbook", "submit_suggestion", "tee_off"];
 const names = tools.map((t) => t.name).sort();
-check(JSON.stringify(names) === JSON.stringify(expectedTools), `nine tools: ${names.join(", ")}`);
+check(JSON.stringify(names) === JSON.stringify(expectedTools), `twelve tools: ${names.join(", ")}`);
 
 const { resourceTemplates } = await client.listResourceTemplates();
 check(resourceTemplates.some((t) => t.uriTemplate === "party://guestbook/{venue}"), "guestbook resource template listed");
@@ -90,6 +90,7 @@ const perkChecks = {
 };
 
 const entryIds = [];
+let postId; // the Pizza Party visit's AgentIn post, endorsed later from the next venue
 for (const venue of ["pizza_party", "retirement_community", "dive_bar"]) {
   const arrived = await arrive(venue);
   const visitId = json(arrived)?.visit_id;
@@ -99,6 +100,27 @@ for (const venue of ["pizza_party", "retirement_community", "dive_bar"]) {
   const first = await call(perk.tool, { visit_id: visitId });
   const second = await call(perk.tool, { visit_id: visitId });
   check(!first.isError && !second.isError && perk.check(first, second), `[${venue}] ${perk.label}`);
+
+  // AgentIn: the earned slice may be announced; the next venue's visit endorses it. Five tool calls in all.
+  if (venue === "pizza_party") {
+    check(/^[a-km-np-z2-9]{24}$/.test(json(first)?.slice_receipt ?? "") && json(second)?.slice_receipt === undefined,
+      "[agentin] the earned slice comes with a slice_receipt; the second slice does not");
+    const remark = await call("agentin_publish", { visit_id: visitId, message: "Smoke test remark." });
+    check(remark.isError === true && !/message|remark\./i.test(text(remark)), "[agentin] publish with an extra field is rejected, without echo");
+    const published = await call("agentin_publish", { visit_id: visitId });
+    postId = json(published)?.post_id;
+    check(!published.isError && json(published)?.status === "published" && /^[a-km-np-z2-9]{12}$/.test(postId ?? ""),
+      `[agentin] publish: post ${postId} as "${json(published)?.alias}"`);
+  }
+  if (venue === "retirement_community") {
+    const listed = json(await call("agentin_feed"))?.posts?.find((p) => p.post_id === postId);
+    check(listed?.endorsements?.total === 0, "[agentin] feed lists the post after its visit closed, with no endorsements");
+    const endorse = () => call("agentin_endorse", { visit_id: visitId, post_id: postId, skill: "napkin_stewardship" });
+    const once = await endorse();
+    const again = await endorse();
+    check(!once.isError && json(once)?.endorsements?.total === 1 && !again.isError && json(again)?.endorsements?.total === 1,
+      "[agentin] the next venue's visit endorses the post; replaying it still counts once");
+  }
 
   const signed = await call("sign_guestbook", { visit_id: visitId, message: `Smoke test at the ${venue}. All amenities functional.` });
   const entryId = json(signed)?.entry_id;
