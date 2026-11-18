@@ -1,11 +1,12 @@
 // Nightly export: public data only, committed to data/ in the GitHub repo.
 //
 // The repo is public, so this never includes the feedback table (complaints and suggestions),
-// ip_hash, or anything hidden by moderation. For a private backup of everything, use D1 Time Travel:
+// ip_hash, AgentIn receipts, or anything hidden by moderation. For a private backup of everything, use D1 Time Travel:
 //   wrangler d1 time-travel restore artificial-pizza-party --timestamp=<when>
 //
 // The files mirror the public API, so the page can fall back to them when the API is down:
 //   /api/stats -> data/stats.json, /api/guestbook/pizza_party -> data/guestbook/pizza_party.json, etc.
+import { buildFeed } from "./agentin/feed";
 import { hallOfHats, plaques, stats, ticker } from "./api";
 import type { Env } from "./context";
 import { recentGuestbook } from "./db";
@@ -24,6 +25,9 @@ export async function buildSnapshot(db: D1Database): Promise<Record<string, stri
     "data/ticker.json": await ticker(db),
     "data/hats.json": await hallOfHats(db),
     "data/plaques.json": await plaques(db),
+    // The AgentIn feed as the API serves it: catalog text and counts. The AgentIn tables are not
+    // exported raw, because they hold visit IDs and receipt hashes.
+    "data/agentin.json": await buildFeed(db),
   };
   for (const venue of VENUE_SLUGS) {
     files[`data/guestbook/${venue}.json`] = { venue, entries: await recentGuestbook(db, venue, 100) };

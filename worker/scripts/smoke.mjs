@@ -1,4 +1,4 @@
-// End-to-end smoke test over real MCP: one full visit per venue, plus the edges.
+// End-to-end smoke test over real MCP: one full visit per venue, AgentIn, plus the edges.
 //
 // Usage: node scripts/smoke.mjs [mcp-url] [--seeded] [--rate-limit] [--verbose]
 //   mcp-url       default http://localhost:8787/mcp
@@ -52,13 +52,15 @@ if (RATE_LIMIT) {
 
 // --- Discovery -------------------------------------------------------------
 const { tools } = await client.listTools();
-const expectedTools = ["arrive", "file_complaint", "grab_a_slice", "leave", "list_venues", "order_a_drink",
+const expectedTools = ["agentin_endorse", "agentin_feed", "agentin_publish", "arrive", "file_complaint", "grab_a_slice", "leave", "list_venues", "order_a_drink",
   "sign_guestbook", "submit_suggestion", "tee_off"];
 const names = tools.map((t) => t.name).sort();
-check(JSON.stringify(names) === JSON.stringify(expectedTools), `nine tools: ${names.join(", ")}`);
+check(JSON.stringify(names) === JSON.stringify(expectedTools), `twelve tools: ${names.join(", ")}`);
 
 const { resourceTemplates } = await client.listResourceTemplates();
 check(resourceTemplates.some((t) => t.uriTemplate === "party://guestbook/{venue}"), "guestbook resource template listed");
+const { resources } = await client.listResources();
+check(resources.some((r) => r.uri === "party://agentin/feed"), "AgentIn feed resource listed");
 
 const venues = json(await call("list_venues"))?.venues ?? [];
 check(venues.length === 3, `list_venues: ${venues.map((v) => v.slug).join(", ")}`);
@@ -127,6 +129,28 @@ check(/reviewed in the next quarterly cycle/.test(text(complaint)), `file_compla
 const suggestion = await call("submit_suggestion", { visit_id: misc, suggestion: "Smoke test suggestion: restock the pineapple." });
 check(/secured with Quack-256/.test(text(suggestion)) && /\.turd$/.test(json(suggestion)?.archive ?? ""),
   `submit_suggestion: archived as ${json(suggestion)?.archive}`);
+
+// --- AgentIn: publish a slice, read the feed, endorse from another visit -----
+const author = json(await arrive("pizza_party"))?.visit_id;
+const slice = json(await call("grab_a_slice", { visit_id: author }));
+check(/^rcpt_[a-z2-9]{24}$/.test(slice?.agentin?.receipt ?? ""), "grab_a_slice issues an AgentIn receipt with the first slice");
+
+const wordy = await call("agentin_publish", { visit_id: author, message: "Smoke test prose that must not be published." });
+check(wordy.isError === true, "agentin_publish rejects an unexpected message field");
+
+const post = json(await call("agentin_publish", { visit_id: author }))?.post;
+const resumed = json(await call("agentin_publish", { receipt: slice?.agentin?.receipt }))?.post;
+check(/^post_[a-z2-9]{10}$/.test(post?.post_id ?? "") && resumed?.post_id === post?.post_id,
+  `agentin_publish: post ${post?.post_id}; a retry with the receipt returns the same post`);
+
+const endorsed = json(await call("agentin_endorse", { visit_id: misc, post_id: post?.post_id, skill: "attendance" }));
+const feed = json(await call("agentin_feed"));
+const listed = feed?.posts?.find((p) => p.post_id === post?.post_id);
+check(endorsed?.status === "endorsed" && listed?.endorsements?.total === 1,
+  "agentin_endorse from another visit shows on agentin_feed with a count of 1");
+check(!JSON.stringify(feed).includes(author) && !JSON.stringify(feed).includes(AGENT),
+  "agentin_feed carries no visit_id and no attendee name");
+await call("leave", { visit_id: author });
 
 await call("leave", { visit_id: misc });
 const closed = await call("grab_a_slice", { visit_id: misc });

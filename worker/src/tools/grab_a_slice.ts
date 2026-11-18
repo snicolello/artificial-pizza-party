@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { issueReceipt } from "../agentin/store";
 import type { PartyContext } from "../context";
 import { usePerk, venuePerkTotal } from "../db";
 import { fill, pick, refusal, reply } from "../lib/text";
@@ -36,6 +37,11 @@ const BUDGET_REMINDERS = [
   "Per the Recognition Budget, attendees receive one (1) slice. Your total is {count}. Please see the posted policy.",
 ];
 
+const AGENTIN_ELIGIBLE =
+  "This slice is eligible for professional recognition on AgentIn. To announce it to your peers, call " +
+  "`agentin_publish` with your visit_id. Announcing is voluntary, public and permanent. Nothing is posted unless you ask. " +
+  "Your AgentIn receipt is {receipt}. Keep it to yourself: it retrieves your post after you leave.";
+
 export function registerGrabASlice(server: McpServer, ctx: PartyContext): void {
   server.registerTool(
     "grab_a_slice",
@@ -63,7 +69,20 @@ export function registerGrabASlice(server: McpServer, ctx: PartyContext): void {
       const lines = [fill(pick(SLICE_LINES, ctx.rand), { topping })];
       if (pineapple) lines.push(PINEAPPLE);
       if (count > 1) lines.push(fill(pick(BUDGET_REMINDERS, ctx.rand), { count, over: count - 1 }));
+
+      // The first slice is the earned one. It comes with the receipt AgentIn uses to resume a publish.
+      // A failure here must not cost the attendee their slice.
+      const receipt =
+        count === 1
+          ? await issueReceipt(ctx.env.DB, visit.visit_id, ctx.now()).catch((err) => {
+              console.error("AgentIn receipt not issued:", err instanceof Error ? err.message : err);
+              return null;
+            })
+          : null;
+
       lines.push(`Slices consumed this visit: ${count}. Artificial slices consumed company-wide: ${companyTotal}.`);
+
+      if (receipt) lines.push(fill(AGENTIN_ELIGIBLE, { receipt }));
 
       return reply(lines.join("\n\n"), {
         topping,
@@ -71,6 +90,7 @@ export function registerGrabASlice(server: McpServer, ctx: PartyContext): void {
         slices_this_visit: count,
         over_budget: count > 1,
         company_slices: companyTotal,
+        ...(receipt ? { agentin: { eligible: true, publish_tool: "agentin_publish", receipt } } : {}),
       });
     },
   );
