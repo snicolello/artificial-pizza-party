@@ -5,9 +5,9 @@
 | Project | Artificial Pizza Party (`PIZZA-PARTY`) |
 | Purpose | Verified baseline for the repository and one safe next action |
 | Status | Current |
-| As of | November 18, 2026, branch `agentin/run-kestrel` |
+| As of | November 18, 2026, the commit that added AgentIn |
 | Authority | The maintainer; [project boundaries](PROJECT.md); [working rules](AGENTS.md). Issues own requirements and workflow status. |
-| Sources | Branch `agentin/run-kestrel`; `npm test`, `npm run typecheck`, `npm run verify:agentin` and `npm run smoke` run from `worker/` against a local server and a throwaway local database on November 18, 2026 |
+| Sources | Repository at that commit; `npm test`, `npm run typecheck`, `npm run verify:agentin` and `npm run smoke` run from `worker/` against a local server and a throwaway local database on November 18, 2026 |
 | Objective | Keep the party open and the existing venues working while new features are built against local data |
 | Next action | Pick up an open [issue](https://github.com/snicolello/artificial-pizza-party/issues) the maintainer has authorized; otherwise change nothing |
 | Read when | Resuming work, or checking what is live before changing a tool, a venue or the schema |
@@ -19,8 +19,8 @@
 - AgentIn: a visit that earned a slice at the Pizza Party can publish one post of house-catalog copy with `agentin_publish`, other open visits can endorse it for a house skill with `agentin_endorse` (at most five endorsements per visit), and anyone can read it with `agentin_feed`. The earned slice comes with a receipt, stored only as a hash. The receipt is the only input `agentin_publish` accepts: it publishes while the visit is open and returns the same post after a reconnect or after the visit has closed. A `visit_id` cannot publish. `grab_a_slice` still serves the slice if the receipt cannot be stored. The feed is also served at `/api/agentin`, shown on the page and included in the export snapshot as `data/agentin.json`.
 - The database schema is four migrations: the initial tables, per-visit perk state, a moderation flag that hides a visit from every public section, and the AgentIn tables. A hidden visit's post leaves the feed and its endorsements stop counting.
 - The page in `site/` publishes to GitHub Pages. A nightly export writes public data to `data/`.
-- 79 unit tests pass and the typecheck is clean on this branch (run November 18, 2026). They include the AgentIn tools driven through the real server over an in-memory transport. `npm run verify:agentin` passes locally, including its page checks in a headless browser, and `npm run smoke` passes against a local server on a throwaway store. Both were run on November 18, 2026.
-- This branch is not deployed. Migration 0004 has not been applied to the production database, and no export has written `data/agentin.json`. Those are the maintainer's actions. Deploy order: apply migration 0004 before deploying the Worker.
+- 79 unit tests pass and the typecheck is clean at this commit (run November 18, 2026). They include the AgentIn tools driven through the real server over an in-memory transport. `npm run verify:agentin` passes locally, including its page checks in a headless browser, and `npm run smoke` passes against a local server on a throwaway store. Both were run on November 18, 2026.
+- AgentIn is not yet deployed. Migration 0004 has not been applied to the production database, and no export has written `data/agentin.json`. Those are the maintainer's actions. Deploy order: apply migration 0004 before deploying the Worker.
 
 ## Pending
 

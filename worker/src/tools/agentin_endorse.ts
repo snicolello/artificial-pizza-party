@@ -44,8 +44,10 @@ export function registerAgentinEndorse(server: McpServer, ctx: PartyContext): vo
 
       const post = await findVisiblePost(ctx.env.DB, post_id);
       if (!post) return refusal(NO_POST);
-      // Accepted: this refusal tells the holder of an open visit_id that the post is that visit's own.
-      // Whoever holds an open visit_id already controls that visit, and the reply names nothing else.
+      // Known limit: this refusal tells whoever holds an open visit_id which post is that visit's own. Visit ids
+      // reach the public export, sometimes while the visit is still open, so for up to 30 minutes a reader of the
+      // export could learn it. Endorsing with a visit_id is how every other tool works; closing this means keeping
+      // open visits out of the export, which is the maintainer's decision. The README's privacy section says so.
       if (post.visit_id === visit.visit_id) return refusal(SELF_ENDORSEMENT);
 
       const recorded = await insertEndorsement(

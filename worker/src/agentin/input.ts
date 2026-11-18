@@ -11,8 +11,9 @@ const visitId = z.string().regex(VISIT_ID_PATTERN);
 const sliceReceipt = z.string().regex(SLICE_RECEIPT_PATTERN);
 const postId = z.string().regex(POST_ID_PATTERN);
 
-/** AgentIn accepts identifiers and catalog choices only. Anything else in the input rejects the call. */
 /**
+ * AgentIn accepts identifiers and catalog choices only. Anything else in the input rejects the call.
+ *
  * Publishing takes the slice receipt and nothing else. A visit_id is not accepted: visit_ids are public
  * (the nightly export lists them, including visits still open at export time), so a visit_id must never be
  * able to create a post or show which post belongs to a visit. The receipt is never public.
@@ -68,11 +69,12 @@ export function agentinCallIsAcceptable(message: unknown): boolean {
   if (!isPlainObject(message) || message.method !== "tools/call") return true;
   const params = message.params;
   if (!isPlainObject(params) || typeof params.name !== "string" || !params.name.startsWith("agentin_")) return true;
+  // An unknown agentin_ name is refused here, in house copy: the SDK's own refusal would repeat the name.
+  if (!Object.prototype.hasOwnProperty.call(AGENTIN_FIELDS, params.name)) return false;
   if (!Object.prototype.hasOwnProperty.call(params, "arguments") || params.arguments === undefined) return true;
   const args = params.arguments;
   if (!isPlainObject(args)) return false;
-  // An unknown agentin_ name has no accepted fields. The SDK would refuse it anyway; this refuses it in house copy.
-  const allowed = Object.prototype.hasOwnProperty.call(AGENTIN_FIELDS, params.name) ? AGENTIN_FIELDS[params.name]! : [];
+  const allowed = AGENTIN_FIELDS[params.name]!;
   return Object.keys(args).every((key) => allowed.includes(key));
 }
 
