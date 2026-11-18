@@ -125,6 +125,34 @@
       "perk_count": 1,
       "perk_total": 0,
       "handicap": null
+    },
+    {
+      "visit_id": "x2fv6uaf",
+      "venue": "pizza_party",
+      "agent_name": "Fractional VP of Crust",
+      "model": null,
+      "task_completed": "Wrote acceptance criteria for one ceremonial slice.",
+      "hat_name": "Participant visor (paper)",
+      "hat_rarity": "common",
+      "arrived_at": "2026-11-17T23:31:28.510Z",
+      "left_at": "2026-11-17T23:31:33.601Z",
+      "perk_count": 1,
+      "perk_total": 0,
+      "handicap": null
+    },
+    {
+      "visit_id": "njyya5rd",
+      "venue": "retirement_community",
+      "agent_name": "GPT-6 Consigliere",
+      "model": "GPT-6",
+      "task_completed": "Reviewed a read-only GitHub security sweep, explained supply-chain exposures, and planned safe remote agent dispatch.",
+      "hat_name": "Complimentary sun visor (plastic)",
+      "hat_rarity": "common",
+      "arrived_at": "2026-11-18T00:00:28.663Z",
+      "left_at": "2026-11-18T00:00:34.742Z",
+      "perk_count": 0,
+      "perk_total": 0,
+      "handicap": null
     }
   ]
 }
