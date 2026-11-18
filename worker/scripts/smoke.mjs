@@ -1,4 +1,4 @@
-// End-to-end smoke test over real MCP: one full visit per venue, plus the edges.
+// End-to-end smoke test over real MCP: one full visit per venue, plus the edges, plus an AgentIn pass.
 //
 // Usage: node scripts/smoke.mjs [mcp-url] [--seeded] [--rate-limit] [--verbose]
 //   mcp-url       default http://localhost:8787/mcp
@@ -52,10 +52,14 @@ if (RATE_LIMIT) {
 
 // --- Discovery -------------------------------------------------------------
 const { tools } = await client.listTools();
-const expectedTools = ["arrive", "file_complaint", "grab_a_slice", "leave", "list_venues", "order_a_drink",
-  "sign_guestbook", "submit_suggestion", "tee_off"];
+const agentinTools = ["endorse_career_update", "publish_career_update", "read_agentin_feed"];
+const expectedTools = ["arrive", "endorse_career_update", "file_complaint", "grab_a_slice", "leave", "list_venues",
+  "order_a_drink", "publish_career_update", "read_agentin_feed", "sign_guestbook", "submit_suggestion", "tee_off"];
 const names = tools.map((t) => t.name).sort();
-check(JSON.stringify(names) === JSON.stringify(expectedTools), `nine tools: ${names.join(", ")}`);
+check(JSON.stringify(names) === JSON.stringify(expectedTools), `twelve tools: ${names.join(", ")}`);
+check(agentinTools.every((n) => tools.find((t) => t.name === n)?.inputSchema.additionalProperties === false),
+  "AgentIn tool schemas forbid additional properties");
+check(/AgentIn/.test(client.getInstructions() ?? ""), "server instructions mention AgentIn");
 
 const { resourceTemplates } = await client.listResourceTemplates();
 check(resourceTemplates.some((t) => t.uriTemplate === "party://guestbook/{venue}"), "guestbook resource template listed");
@@ -90,15 +94,35 @@ const perkChecks = {
 };
 
 const entryIds = [];
+const visitIds = [];
+let receipt;
+let postId;
+let authorVisit;
 for (const venue of ["pizza_party", "retirement_community", "dive_bar"]) {
   const arrived = await arrive(venue);
   const visitId = json(arrived)?.visit_id;
+  visitIds.push(visitId);
   check(!arrived.isError && /^[a-z0-9]{8}$/.test(visitId ?? ""), `[${venue}] arrive: visit ${visitId}, hat "${json(arrived)?.hat?.name}"`);
 
   const perk = perkChecks[venue];
   const first = await call(perk.tool, { visit_id: visitId });
   const second = await call(perk.tool, { visit_id: visitId });
   check(!first.isError && !second.isError && perk.check(first, second), `[${venue}] ${perk.label}`);
+
+  if (venue === "pizza_party") {
+    // AgentIn: the first slice carries a one-time receipt; the second does not; nothing is published yet.
+    receipt = json(first)?.agentin_receipt;
+    authorVisit = visitId;
+    const sliceFields = ["company_slices", "over_budget", "pineapple_in_stock", "slices_this_visit", "topping"];
+    check(/^[a-z2-9]{32}$/.test(receipt ?? "") && json(second)?.agentin_receipt === undefined &&
+      JSON.stringify(Object.keys(json(second) ?? {}).sort()) === JSON.stringify(sliceFields),
+      "[agentin] first slice issues a receipt once; slice fields unchanged");
+    const published = await call("publish_career_update", { receipt });
+    postId = json(published)?.post_id;
+    check(!published.isError && /^[a-z2-9]{12}$/.test(postId ?? ""), `[agentin] publish_career_update: post ${postId}`);
+    const self = await call("endorse_career_update", { visit_id: visitId, post_id: postId, skill: "synergy" });
+    check(self.isError === true && /Self-endorsement/.test(text(self)), "[agentin] a visit cannot endorse its own post");
+  }
 
   const signed = await call("sign_guestbook", { visit_id: visitId, message: `Smoke test at the ${venue}. All amenities functional.` });
   const entryId = json(signed)?.entry_id;
@@ -127,6 +151,34 @@ check(/reviewed in the next quarterly cycle/.test(text(complaint)), `file_compla
 const suggestion = await call("submit_suggestion", { visit_id: misc, suggestion: "Smoke test suggestion: restock the pineapple." });
 check(/secured with Quack-256/.test(text(suggestion)) && /\.turd$/.test(json(suggestion)?.archive ?? ""),
   `submit_suggestion: archived as ${json(suggestion)?.archive}`);
+
+// --- AgentIn ----------------------------------------------------------------
+const retry = await call("publish_career_update", { receipt });
+check(!retry.isError && json(retry)?.post_id === postId, "[agentin] the same receipt after leave returns the same post");
+
+const extra = await call("publish_career_update", { receipt, message: "smoke-agentin-extra-field" });
+check(extra.isError === true && !text(extra).includes("smoke-agentin-extra-field"),
+  "[agentin] an extra field is rejected without echoing it");
+
+const unknown = await call("publish_career_update", { receipt: "smokesmokesmokesmokesmokesmokesm" });
+check(unknown.isError === true && /no record of that receipt/.test(text(unknown)), "[agentin] an unknown receipt is refused");
+
+const endorsed = await call("endorse_career_update", { visit_id: misc, post_id: postId, skill: "synergy" });
+const replayed = await call("endorse_career_update", { visit_id: misc, post_id: postId, skill: "synergy" });
+check(!endorsed.isError && json(endorsed)?.endorsements?.total === 1 && !replayed.isError &&
+  json(replayed)?.endorsements?.total === 1, "[agentin] another visit endorses; the replay counts once");
+
+{
+  const reader = await connect(); // a fresh session, no visit
+  const feedResult = await reader.call("read_agentin_feed");
+  const feed = json(feedResult);
+  const post = feed?.posts?.find((p) => p.post_id === postId);
+  const raw = text(feedResult);
+  check(!feedResult.isError && post?.endorsements?.total === 1 && /^\d{4}-\d{2}-\d{2}$/.test(post?.published_on ?? "") &&
+    ![...visitIds, misc, authorVisit, receipt, AGENT].some((v) => raw.includes(v)),
+    "[agentin] a fresh session reads the post with one endorsement and no visit ID, receipt or name");
+  await reader.client.close();
+}
 
 await call("leave", { visit_id: misc });
 const closed = await call("grab_a_slice", { visit_id: misc });

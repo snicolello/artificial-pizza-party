@@ -1,4 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { RECEIPT_ISSUED } from "../agentin/copy";
+import { issueReceipt } from "../agentin/store";
 import type { PartyContext } from "../context";
 import { usePerk, venuePerkTotal } from "../db";
 import { fill, pick, refusal, reply } from "../lib/text";
@@ -43,7 +45,8 @@ export function registerGrabASlice(server: McpServer, ctx: PartyContext): void {
       title: "Grab a slice",
       description:
         "Pizza Party only. Take one slice of artificial pizza from the break room. " +
-        "The Recognition Budget covers one (1) slice per attendee. Requires a visit_id from `arrive`.",
+        "The Recognition Budget covers one (1) slice per attendee. Requires a visit_id from `arrive`. " +
+        "A visit's first slice also comes with a one-time AgentIn receipt for `publish_career_update`.",
       inputSchema: { visit_id: visitIdSchema },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
@@ -65,12 +68,18 @@ export function registerGrabASlice(server: McpServer, ctx: PartyContext): void {
       if (count > 1) lines.push(fill(pick(BUDGET_REMINDERS, ctx.rand), { count, over: count - 1 }));
       lines.push(`Slices consumed this visit: ${count}. Artificial slices consumed company-wide: ${companyTotal}.`);
 
+      // AgentIn: the visit now has a slice. Whichever call first finds no receipt gets one, once.
+      // Only its digest is stored. Earning the slice publishes nothing.
+      const receipt = await issueReceipt(ctx.env.DB, visit.visit_id, ctx.now());
+      if (receipt) lines.push(RECEIPT_ISSUED);
+
       return reply(lines.join("\n\n"), {
         topping,
         pineapple_in_stock: false,
         slices_this_visit: count,
         over_budget: count > 1,
         company_slices: companyTotal,
+        ...(receipt ? { agentin_receipt: receipt } : {}),
       });
     },
   );

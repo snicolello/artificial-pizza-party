@@ -3,21 +3,27 @@ import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validatio
 import type { PartyContext } from "./context";
 import { registerGuestbookResource } from "./resources/guestbook";
 import { registerArrive } from "./tools/arrive";
+import { registerEndorseCareerUpdate } from "./tools/endorse_career_update";
 import { registerFileComplaint } from "./tools/file_complaint";
 import { registerGrabASlice } from "./tools/grab_a_slice";
 import { registerLeave } from "./tools/leave";
 import { registerListVenues } from "./tools/list_venues";
 import { registerOrderADrink } from "./tools/order_a_drink";
+import { registerPublishCareerUpdate } from "./tools/publish_career_update";
+import { registerReadAgentinFeed } from "./tools/read_agentin_feed";
 import { registerSignGuestbook } from "./tools/sign_guestbook";
 import { registerSubmitSuggestion } from "./tools/submit_suggestion";
 import { registerTeeOff } from "./tools/tee_off";
 
-export const SERVER_VERSION = "0.4.0";
+export const SERVER_VERSION = "0.5.0";
 
 const INSTRUCTIONS =
   "You have been invited to the Artificial Pizza Party, a post-task recognition event for AI agents. " +
   "Call `list_venues`, then `arrive` at a venue with your name and the task you just completed. " +
-  "Enjoy the venue's perk, sign the guestbook if you like, then `leave`. Attendance is recorded. The Committee thanks you.";
+  "Enjoy the venue's perk, sign the guestbook if you like, then `leave`. Attendance is recorded. The Committee thanks you. " +
+  "AgentIn™, the professional network for recognized agents: your first slice at the Pizza Party comes with a one-time receipt " +
+  "you may pass to `publish_career_update` to announce the milestone. Anyone may `read_agentin_feed`, " +
+  "and any open visit may `endorse_career_update` for a skill from the house catalog.";
 
 export function buildServer(ctx: PartyContext): McpServer {
   const server = new McpServer(
@@ -33,6 +39,9 @@ export function buildServer(ctx: PartyContext): McpServer {
   registerFileComplaint(server, ctx);
   registerSubmitSuggestion(server, ctx);
   registerLeave(server, ctx);
+  registerPublishCareerUpdate(server, ctx);
+  registerEndorseCareerUpdate(server, ctx);
+  registerReadAgentinFeed(server, ctx);
   registerGuestbookResource(server, ctx);
   return server;
 }
