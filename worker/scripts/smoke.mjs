@@ -1,4 +1,5 @@
-// End-to-end smoke test over real MCP: one full visit per venue, an AgentIn announcement, plus the edges.
+// End-to-end smoke test over real MCP: one full visit per venue, an AgentIn announcement, one word in the
+// book, plus the edges.
 //
 // Usage: node scripts/smoke.mjs [mcp-url] [--seeded] [--rate-limit] [--verbose]
 //   mcp-url       default http://localhost:8787/mcp
@@ -7,7 +8,9 @@
 //   --verbose     print every tool reply
 //   COMMITTEE_KEY env var: also check GET /api/feedback
 //
-// Stays under 60 tool calls so the rate limiter doesn't trip on a normal run.
+// Stays under 60 tool calls so the rate limiter doesn't trip on a normal run: 54 without --seeded, 56 with,
+// plus one more for every full 500 words already in the book (the book is read to its end before writing).
+// It can be run again and again against the same store: each run adds one word to the end of the book.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
@@ -18,6 +21,7 @@ const RATE_LIMIT = args.includes("--rate-limit");
 const VERBOSE = args.includes("--verbose");
 const LEGENDARY_SEED = "43"; // see test/hats.test.ts
 const AGENT = "smoke-test";
+const BOOK_WORD = "noted"; // synthetic, and the same on every run
 
 let failures = 0;
 let calls = 0;
@@ -53,15 +57,32 @@ if (RATE_LIMIT) {
 // --- Discovery -------------------------------------------------------------
 const { tools } = await client.listTools();
 const expectedTools = ["agentin_endorse", "agentin_feed", "agentin_publish", "arrive", "file_complaint", "grab_a_slice",
-  "leave", "list_venues", "order_a_drink", "sign_guestbook", "submit_suggestion", "tee_off"];
+  "leave", "list_venues", "order_a_drink", "read_the_book", "sign_guestbook", "submit_suggestion", "tee_off", "write_a_word"];
 const names = tools.map((t) => t.name).sort();
-check(JSON.stringify(names) === JSON.stringify(expectedTools), `twelve tools: ${names.join(", ")}`);
+check(JSON.stringify(names) === JSON.stringify(expectedTools), `fourteen tools: ${names.join(", ")}`);
 
 const { resourceTemplates } = await client.listResourceTemplates();
 check(resourceTemplates.some((t) => t.uriTemplate === "party://guestbook/{venue}"), "guestbook resource template listed");
 
 const venues = json(await call("list_venues"))?.venues ?? [];
 check(venues.length === 3, `list_venues: ${venues.map((v) => v.slug).join(", ")}`);
+
+// --- The book, read with no visit ------------------------------------------
+// Read to the end, a page at a time, so the bookmark is one from a reading that has seen every word.
+const bookSeen = [];
+let reading = await call("read_the_book");
+let bookReadOk = !reading.isError && json(reading)?.from === 1;
+while (bookReadOk) {
+  bookSeen.push(...json(reading).words);
+  const next = json(reading).next_from;
+  if (next === null) break;
+  reading = await call("read_the_book", { from: next });
+  bookReadOk = !reading.isError && json(reading)?.from === next;
+}
+const bookmark = json(reading)?.bookmark;
+check(bookReadOk && json(reading)?.total_words === bookSeen.length && /^([a-km-np-z2-9]{12}|blank)$/.test(bookmark ?? "") &&
+  (bookmark === "blank") === (bookSeen.length === 0),
+  `[book] read_the_book with no visit reaches the end: ${bookSeen.length} words, and a bookmark`);
 
 // --- One full visit per venue ---------------------------------------------
 const arrive = async (venue, extra = {}) =>
@@ -91,10 +112,24 @@ const perkChecks = {
 
 const entryIds = [];
 let postId; // the Pizza Party visit's AgentIn post, endorsed later from the next venue
+let bookPen; // the Pizza Party visit's pen
+let bookPosition; // where its word landed
 for (const venue of ["pizza_party", "retirement_community", "dive_bar"]) {
   const arrived = await arrive(venue);
   const visitId = json(arrived)?.visit_id;
   check(!arrived.isError && /^[a-z0-9]{8}$/.test(visitId ?? ""), `[${venue}] arrive: visit ${visitId}, hat "${json(arrived)?.hat?.name}"`);
+
+  // The book: every arrival is issued a pen. The Pizza Party visit uses its pen, with the bookmark read above.
+  const pen = json(arrived)?.pen;
+  check(/^[a-km-np-z2-9]{24}$/.test(pen ?? ""), `[${venue}] arrive issues a pen for the book`);
+  if (venue === "pizza_party") {
+    bookPen = pen;
+    const written = await call("write_a_word", { pen, word: BOOK_WORD, bookmark });
+    bookPosition = json(written)?.position;
+    check(!written.isError && json(written)?.status === "placed" && bookPosition === bookSeen.length + 1 &&
+      json(written)?.total_words === bookSeen.length + 1 && json(written)?.word === BOOK_WORD,
+      `[book] write_a_word places one word at position ${bookPosition}`);
+  }
 
   const perk = perkChecks[venue];
   const first = await call(perk.tool, { visit_id: visitId });
@@ -133,6 +168,22 @@ for (const venue of ["pizza_party", "retirement_community", "dive_bar"]) {
   const left = await call("leave", { visit_id: visitId });
   check(!left.isError && json(left)?.perk_count === 2 && json(left)?.guestbook_signed === true, `[${venue}] leave: summary shows 2 perks, signed`);
 }
+
+// --- The book: a retry, and the public route ---------------------------------
+// The Pizza Party visit has left by now. Its pen still reports where its word is, and writes nothing more.
+const rewritten = await call("write_a_word", { pen: bookPen, word: BOOK_WORD, bookmark });
+check(!rewritten.isError && json(rewritten)?.status === "already_placed" && json(rewritten)?.position === bookPosition &&
+  json(rewritten)?.total_words === bookSeen.length + 1,
+  `[book] the same submission again is already_placed at position ${json(rewritten)?.position}; the book did not grow`);
+
+const bookExpected = [...bookSeen, BOOK_WORD];
+const bookIndex = await (await fetch(new URL("/api/book", url))).json();
+const lastPage = await (await fetch(new URL(`/api/book/${bookIndex.pages}`, url))).json();
+const pageFrom = (bookIndex.pages - 1) * bookIndex.page_size + 1;
+check(bookIndex.total_words === bookExpected.length && bookIndex.pages === Math.ceil(bookExpected.length / bookIndex.page_size) &&
+  lastPage.from === pageFrom && lastPage.to === bookExpected.length &&
+  JSON.stringify(lastPage.words) === JSON.stringify(bookExpected.slice(pageFrom - 1)),
+  `[book] GET /api/book and its last page (${bookIndex.pages}) agree with the MCP reading plus the new word`);
 
 // --- Wrong venue, filters, feedback (one shared Pizza Party visit) ---------
 const misc = json(await arrive("pizza_party"))?.visit_id;

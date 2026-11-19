@@ -5,13 +5,13 @@ import { hashPen, HOUSE_MARK, isWord } from "../book/rules";
 import { bookHead, placeWord, readBook, visitIdForPen, wordByVisit } from "../book/store";
 import type { PartyContext } from "../context";
 import { findOpenVisit } from "../db";
-import { REJECTED, meetsCommunityStandards } from "../filter";
+import { REJECTED, containsProfanity, meetsCommunityStandards } from "../filter";
 import { newId } from "../lib/ids";
 import { fill, refusal, reply } from "../lib/text";
 
 const ADVERTISED = advertised(writeInput);
 
-/** How many of the book's last displayed words are read together with a candidate by the filter. */
+/** How many of the book's last displayed words are read together with a candidate for profanity. */
 const CONTEXT_WORDS = 8;
 
 // Every refusal below is fixed text and free: nothing is written and the pen is not used.
@@ -98,10 +98,12 @@ export function registerWriteAWord(server: McpServer, ctx: PartyContext): void {
       const head = await bookHead(db);
       if (head.bookmark !== bookmark) return refusal(MOVED_ON);
 
-      // The word in context, as the book would display it, so that nothing the filter refuses can be
-      // assembled one word at a time.
+      // The word in context, as the book would display it, so that nothing profane can be assembled one word
+      // at a time. Profanity only: the word by itself has already passed the whole filter above, and one word
+      // cannot hold a link. The link patterns are not run across words, because they read a full stop followed
+      // by an ordinary word ("end. Me") as a domain.
       const tail = await readBook(db, Math.max(1, head.total_words - CONTEXT_WORDS + 1), CONTEXT_WORDS);
-      if (!meetsCommunityStandards([...tail.words, word].join(" "))) return refusal(REJECTED);
+      if (containsProfanity([...tail.words, word].join(" "))) return refusal(REJECTED);
 
       // The open visit, the bookmark and the one word per visit are all checked again inside this statement.
       const placed = await placeWord(

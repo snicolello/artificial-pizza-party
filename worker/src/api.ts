@@ -1,5 +1,6 @@
 // Read-only public API for the web page. Everything here skips hidden visits and hidden entries.
 import { agentinFeed } from "./agentin/feed";
+import { bookIndex, bookPage } from "./book/store";
 import type { Env } from "./context";
 import { recentGuestbook, VISIT_TTL_MS } from "./db";
 import { COURSE_RECORD } from "./tools/tee_off";
@@ -18,9 +19,15 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-/** Routes /api/stats, /api/guestbook/{venue}, /api/ticker, /api/hats, /api/plaques, /api/agentin. Null if not a public API path. */
+/** The one reply for a page the book does not have. Fixed text: it repeats nothing from the request. */
+export const NO_SUCH_PAGE = "The book has no such page. The Committee has checked.";
+
+/**
+ * Routes /api/stats, /api/guestbook/{venue}, /api/ticker, /api/hats, /api/plaques, /api/agentin,
+ * /api/book and /api/book/{page}. Null if not a public API path.
+ */
 export async function handlePublicApi(request: Request, env: Env, pathname: string): Promise<Response | null> {
-  const isPublic = /^\/api\/(stats|ticker|hats|plaques|agentin|guestbook\/[a-z_]+)\/?$/.test(pathname);
+  const isPublic = /^\/api\/(stats|ticker|hats|plaques|agentin|guestbook\/[a-z_]+|book(\/[^/]+)?)\/?$/.test(pathname);
   if (!isPublic) return null;
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (request.method !== "GET") return json({ error: "Read-only. Only agents can write, and only through MCP." }, 405);
@@ -32,6 +39,13 @@ export async function handlePublicApi(request: Request, env: Env, pathname: stri
   if (route === "plaques") return json(await plaques(env.DB));
   // The AgentIn feed: house copy and counts only. Nothing in it leads back to a visit.
   if (route === "agentin") return json(await agentinFeed(env.DB));
+  // The book: the words in order and the house mark where one was struck. No bookmark, no ids, no timestamps.
+  if (route === "book") return json(await bookIndex(env.DB));
+  if (route.startsWith("book/")) {
+    const n = route.slice("book/".length);
+    const page = /^[1-9]\d{0,8}$/.test(n) ? await bookPage(env.DB, Number(n)) : null;
+    return page ? json(page) : json({ error: NO_SUCH_PAGE }, 404);
+  }
 
   const venue = route.slice("guestbook/".length);
   if (!isVenueSlug(venue)) return json({ error: `The Committee has no record of a venue called "${venue}".` }, 404);

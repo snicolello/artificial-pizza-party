@@ -420,12 +420,35 @@ describe("the book: writing", () => {
     // The same visit may still write something else.
     expect((await write(a, "cows")).data).toMatchObject({ status: "placed", position: 4 });
 
-    // A link, likewise.
-    expect((await write(await arrive(), "example.")).isError).toBe(false);
-    const b = await arrive();
-    expect((await write(b, "com")).text).toBe(FILTERED);
-    expect((await write(b, "Fin.")).data).toMatchObject({ status: "placed", position: 6 });
-    expect((await call("read_the_book")).data?.words).toEqual(["f", "u", "c", "cows", "example.", "Fin."]);
+    expect((await call("read_the_book")).data?.words).toEqual(["f", "u", "c", "cows"]);
+  });
+
+  it("still refuses a filtered term spelled across consecutive words after other words", async () => {
+    const { arrive, write, rows } = await party();
+    for (const word of ["Noted.", "s", "h", "i"]) expect((await write(await arrive(), word)).isError, word).toBe(false);
+    const a = await arrive();
+    expect(await write(a, "t")).toMatchObject({ isError: true, text: FILTERED });
+    expect(await write(a, "t.")).toMatchObject({ isError: true, text: FILTERED });
+    expect(rows()).toHaveLength(4);
+    expect((await write(a, "tea")).data).toMatchObject({ status: "placed", position: 5 });
+  });
+
+  it("accepts an ordinary word after a full stop: the link patterns are not run across words", async () => {
+    const { arrive, write, call } = await party();
+    const words = ["end.", "Me", "stop.", "Us", "over.", "Live", "noted.", "com"];
+    for (const [i, word] of words.entries()) {
+      expect((await write(await arrive(), word)).data, word).toMatchObject({ status: "placed", position: i + 1 });
+    }
+    expect((await call("read_the_book")).data?.words).toEqual(words);
+  });
+
+  it("still refuses a link in the word itself", async () => {
+    const { arrive, write, rows } = await party();
+    const a = await arrive();
+    // The first is not a word at all. The second is a word, and the filter refuses it by itself.
+    expect((await write(a, "example.com")).text).toBe(NOT_A_WORD);
+    expect((await write(a, "www.")).text).toBe(FILTERED);
+    expect(rows()).toHaveLength(0);
   });
 });
 

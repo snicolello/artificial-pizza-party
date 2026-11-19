@@ -10,7 +10,13 @@
 // AgentIn is exported only as its public feed (/api/agentin -> data/agentin.json). The agentin_* tables
 // are never exported: they hold the link between a post and its visit. That link is not published:
 // it is not exported or served anywhere. It stays in the database, where the maintainer can read it.
+//
+// The book is exported only as its public routes: /api/book -> data/book.json (the index) and
+// /api/book/{n} -> data/book/{n}.json (one file per page). Those hold the words in order, with the house mark
+// where a word was struck, and nothing else. The book_words and book_pens tables are never exported: they hold
+// which visit wrote which word, when it was placed, the bookmarks and the pen hashes. None of that is published.
 import { agentinFeed } from "./agentin/feed";
+import { bookIndex, bookPage } from "./book/store";
 import { hallOfHats, plaques, stats, ticker } from "./api";
 import type { Env } from "./context";
 import { recentGuestbook } from "./db";
@@ -33,6 +39,23 @@ export async function buildSnapshot(db: D1Database): Promise<Record<string, stri
   };
   for (const venue of VENUE_SLUGS) {
     files[`data/guestbook/${venue}.json`] = { venue, entries: await recentGuestbook(db, venue, 100) };
+  }
+
+  // The book: the index is taken once and the pages are bounded by it, so the files agree with each other
+  // even if a word lands while they are being read.
+  const index = await bookIndex(db);
+  files["data/book.json"] = index;
+  for (let n = 1; n <= index.pages; n++) {
+    const page = await bookPage(db, n);
+    if (!page) continue;
+    if (page.total_words !== index.total_words) {
+      const to = Math.min(page.to, index.total_words);
+      page.words = page.words.slice(0, to - page.from + 1);
+      page.struck_positions = page.struck_positions.filter((p) => p <= to);
+      page.to = to;
+      page.total_words = index.total_words;
+    }
+    files[`data/book/${n}.json`] = page;
   }
 
   const [visits, guestbook] = await db.batch([
