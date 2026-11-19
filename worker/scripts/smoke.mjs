@@ -14,8 +14,10 @@
 // with the MCP reading, and prints one line saying the write was skipped.
 //
 // Stays under 60 tool calls so the rate limiter doesn't trip on a normal run: on localhost 54 without
-// --seeded, 56 with; on any other host two fewer (52 and 54). Add one more for every full 500 words already
-// in the book (the book is read to its end).
+// --seeded, 56 with; on any other host two fewer (52 and 54). The book is read to its end, which is one more
+// call for every full 500 words already in it, so against a long book the script paces itself: it counts its
+// calls and, when the next one would be more than 58 in a minute, prints one line and waits for the minute to
+// pass before going on. A run against a short book never waits. (--rate-limit is not paced; it is the burst.)
 // It can be run again and again against the same store: on localhost each run adds one word to the end of
 // the book; anywhere else it adds nothing to the book.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -34,6 +36,22 @@ const WRITE_TO_BOOK = ["localhost", "127.0.0.1"].includes(new URL(url).hostname)
 
 let failures = 0;
 let calls = 0;
+// The limiter allows 60 tool calls a minute. No more than CALL_BUDGET are sent in any WINDOW_MS.
+const CALL_BUDGET = 58;
+const WINDOW_MS = 61_000;
+let sentInWindow = 0;
+let lastSentAt = 0;
+async function pace() {
+  if (Date.now() - lastSentAt >= WINDOW_MS) sentInWindow = 0; // the last call is a full window ago: a fresh minute
+  if (sentInWindow >= CALL_BUDGET) {
+    const wait = WINDOW_MS - (Date.now() - lastSentAt);
+    console.log(`WAIT  ${sentInWindow} tool calls sent in the last minute; waiting ${Math.ceil(wait / 1000)}s for the rate limit (60 a minute) before going on`);
+    await new Promise((r) => setTimeout(r, wait));
+    sentInWindow = 0;
+  }
+  sentInWindow++;
+  lastSentAt = Date.now();
+}
 const check = (ok, label) => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${label}`);
   if (!ok) failures++;
@@ -45,6 +63,7 @@ async function connect(headers = {}) {
   const client = new Client({ name: "smoke-test", version: "0.0.0" });
   await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers } }));
   const call = async (name, args = {}) => {
+    if (!RATE_LIMIT) await pace();
     calls++;
     const result = await client.callTool({ name, arguments: args });
     if (VERBOSE) console.log(`\n--- ${name} ---\n${text(result)}\n`);

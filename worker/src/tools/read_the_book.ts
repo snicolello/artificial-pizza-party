@@ -30,7 +30,7 @@ const AT_END =
 /** A well-formed bookmark that no word carries. Fixed text: it repeats nothing the caller sent. */
 export const UNKNOWN_BOOKMARK =
   "The Committee has no record of that bookmark. To read the book from the first word, call `read_the_book` " +
-  "with no arguments. Nothing has been written, and no pen has been used.";
+  "with no arguments.";
 
 export function registerReadTheBook(server: McpServer, ctx: PartyContext): void {
   server.registerTool(

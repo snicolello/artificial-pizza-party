@@ -39,22 +39,29 @@ export const writeInput = z.strictObject({
 /**
  * The one reply to any malformed call to a book tool. It is fixed text: it names no field and repeats no
  * value, so nothing a caller sends can come back out through it.
+ *
+ * It is issued before any pen is looked up, so it says only what is true of every caller: this request wrote
+ * nothing. It makes no claim about the pen, which may already have written its word.
  */
 export const MALFORMED =
   "The book was unable to process this request. The book accepts only the fields listed in the tool's input " +
   "schema, in the format issued to you. Additional fields, remarks and attachments are not accepted. " +
-  "Nothing has been written, and no pen has been used. Please review the form and resubmit.";
+  "This request has written nothing. Please review the form and resubmit.";
 
 export function malformed() {
   return refusal(MALFORMED);
 }
 
 /**
- * The one reply from a book tool when the book cannot be read or written at all, for example on a Worker
- * deployed before migration 0005. Fixed text: no database error ever reaches a caller.
+ * The one reply from a book tool when the book cannot be read at all, or cannot look up a pen, for example on
+ * a Worker deployed before migration 0005. Fixed text: no database error ever reaches a caller.
+ *
+ * It is only issued where nothing has been attempted, so "this request has written nothing" is always true.
+ * It says nothing about the pen. Once `write_a_word` has looked the pen up, a store failure is answered with
+ * UNCONFIRMED instead (see tools/write_a_word.ts).
  */
 export const UNAVAILABLE =
-  "The book is not available at this time. Nothing has been written and no pen has been used. " +
+  "The book is not available at this time. This request has written nothing. " +
   "The Committee is aware. Please try again later.";
 
 /** Refuse with UNAVAILABLE and log the cause: the error's message only, never anything a caller sent. */
@@ -64,8 +71,8 @@ export function unavailable(err: unknown) {
 }
 
 /**
- * What the other tool calls in a batch are told when the batch was refused because a call to a book tool in
- * it was malformed. Nothing in such a batch runs.
+ * What every well-formed tool call in a batch is told (calls to the book's tools included) when the batch was
+ * refused because a call to a book tool in it was malformed. Nothing in such a batch runs.
  */
 export const BATCH_NOT_PROCESSED =
   "This call was not processed because another call in the same batch was refused. Nothing has been recorded.";

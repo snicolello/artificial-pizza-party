@@ -14,6 +14,12 @@
 // It never talks to anything but localhost and never passes --remote.
 //
 // The local rate limit (60 tool calls a minute) stays on. The script counts its calls and waits when it must.
+// Scenario 3 has two parts. The first is the scenario as written: two visits, one bookmark, the same moment.
+// The second, run later in the script, repeats the race with many visits at once, for several rounds
+// (RACE_WRITERS and RACE_ROUNDS below). In both, the submissions are released at the same instant on a
+// connection each (see together): calls merely started together are handled one after another by the local
+// server, and then the tool's first, non-atomic look at the bookmark decides the race and the single statement
+// that places a word is never tested. Scenario 4 also checks that a visit that has left cannot write.
 // The page checks need Playwright. It is not a dependency: if this machine has none, they are reported as SKIP,
 // and a run with any SKIP is incomplete: it says so and exits 1 unless --allow-skip was passed.
 // Scenario 7 ends with the smoke test, which runs last so that its calls get a window of their own.
@@ -62,6 +68,8 @@ const TASKS = {
   applicant: "Renewed the parking permit",
   latecomer: "Restocked the sign-in sheets",
   regular: "Attended as scheduled",
+  departed: "Returned the visitor badge",
+  crowd: "Queued for the sign-in sheet",
 };
 // One word each. Every one is different, so a word can be looked for by itself, and none appears in a task.
 const WORDS = {
@@ -71,7 +79,17 @@ const WORDS = {
   right_hand: "stapler",
   applicant: "biscuit.",
   latecomer: "Adjourned.",
+  departed: "Belatedly",
 };
+// The many-at-once rounds of scenario 3: in each round RACE_WRITERS visits that hold the same current bookmark
+// submit at the same instant, each on a connection of its own. A refused visit has not used its word, so it
+// submits again in the next round; only the round's one winner is replaced.
+const RACE_ROUNDS = 4;
+const RACE_WRITERS = 10;
+const RACE_WORDS = ["agenda", "binder", "carpet", "folder", "ledger", "memo", "notice", "pencil", "quorum", "roster", "signage", "toner", "voucher"];
+if (RACE_WORDS.length !== RACE_WRITERS + RACE_ROUNDS - 1 || new Set(RACE_WORDS).size !== RACE_WORDS.length) {
+  throw new Error("The many-at-once rounds need one distinct word per visit.");
+}
 const HOUSE_MARK = "[struck]";
 const PAGE_SIZE = 500;
 // The word the filter refuses. It is assembled here and never printed: output shows the placeholder.
@@ -264,6 +282,18 @@ async function pace() {
   recent.push(Date.now());
   toolCalls++;
 }
+/** Wait until `n` calls can be sent at once without any of them pausing: a burst must not be split by the pacing. */
+async function roomFor(n) {
+  for (;;) {
+    const now = Date.now();
+    recent = recent.filter((t) => now - t < WINDOW_MS);
+    const over = recent.length + n - BUDGET;
+    if (over <= 0) return;
+    const wait = WINDOW_MS - (now - recent[over - 1]) + 50;
+    console.log(`      (pausing ${Math.ceil(wait / 1000)}s for the local rate limit, so that ${n} calls can go at once)`);
+    await sleep(wait);
+  }
+}
 async function waitForClearWindow(why) {
   const now = Date.now();
   recent = recent.filter((t) => now - t < WINDOW_MS);
@@ -332,6 +362,74 @@ async function sendAndDiscard(name, args) {
   const res = await fetch(assertLocal(`${server.base}/mcp`), { method: "POST", headers: mcpHeaders, body: toolCallBody(1, name, args) });
   await res.body?.cancel().catch(() => {});
 }
+
+/** The status and JSON body of a raw HTTP/1.1 response that was read until the server closed the connection. */
+function parseHttpResponse(raw) {
+  const split = raw.indexOf("\r\n\r\n");
+  if (split < 0) throw new Error("A simultaneous submission got no HTTP response.");
+  const head = raw.subarray(0, split).toString("latin1");
+  let body = raw.subarray(split + 4);
+  if (/^transfer-encoding:.*chunked/im.test(head)) {
+    const parts = [];
+    for (let at = 0; ;) {
+      const eol = body.indexOf("\r\n", at);
+      const size = eol < 0 ? 0 : parseInt(body.subarray(at, eol).toString("latin1"), 16);
+      if (!size) break;
+      parts.push(body.subarray(eol + 2, eol + 2 + size));
+      at = eol + 2 + size + 2;
+    }
+    body = Buffer.concat(parts);
+  }
+  return { status: Number(head.match(/^HTTP\/1\.[01] (\d{3})/)?.[1]), json: JSON.parse(body.toString("utf8")) };
+}
+
+/**
+ * Send several tool calls so that they arrive at the same instant, and return their results in order.
+ *
+ * Calls started together with fetch (or with the MCP client, which uses it) do not arrive together: measured
+ * against this local server they are handled one after another, each finished before the next is looked at,
+ * so a race between them is decided by the tool's first, non-atomic look at the bookmark and never reaches the
+ * statement that places a word. So each call here gets a TCP connection of its own, on which the whole request
+ * is sent except its last byte. The server now holds every request, each waiting for its body to end. Then
+ * the last bytes are written in one go, and every handler proceeds at once.
+ */
+async function together(calls) {
+  await roomFor(calls.length);
+  for (let i = 0; i < calls.length; i++) await pace();
+  const { hostname } = new URL(assertLocal(server.base));
+  if (hostname !== "localhost") throw new Error("Refusing to open a socket to anything but localhost.");
+  const pending = calls.map(({ name, args }, i) => {
+    const payload = toolCallBody(i + 1, name, args);
+    const request = Buffer.from(
+      `POST /mcp HTTP/1.1\r\nHost: localhost:${server.port}\r\nContent-Type: ${mcpHeaders["content-type"]}\r\nAccept: ${mcpHeaders.accept}\r\n` +
+      `Connection: close\r\nContent-Length: ${Buffer.byteLength(payload)}\r\n\r\n${payload}`);
+    const socket = connectNet({ host: "127.0.0.1", port: server.port });
+    const chunks = [];
+    const done = new Promise((res, rej) => {
+      socket.on("data", (d) => chunks.push(d));
+      socket.once("close", () => res(Buffer.concat(chunks)));
+      socket.once("error", rej);
+      socket.setTimeout(30_000, () => { socket.destroy(); rej(new Error("A simultaneous submission was not answered in 30s.")); });
+    });
+    const held = new Promise((res, rej) => {
+      socket.once("error", rej);
+      socket.once("connect", () => socket.write(request.subarray(0, -1), (e) => (e ? rej(e) : res())));
+    });
+    return { held, done, release: () => socket.write(request.subarray(-1)) };
+  });
+  await Promise.all(pending.map((p) => p.held));
+  await sleep(250); // every request, short of its last byte, has reached the server
+  for (const p of pending) p.release();
+  const answers = (await Promise.all(pending.map((p) => p.done))).map(parseHttpResponse);
+  return answers.map((answer, i) => {
+    const result = answer.json?.result;
+    if (answer.status !== 200 || !result) throw new Error("A simultaneous submission was not answered with a tool result.");
+    if (result.isError === true && /at capacity/.test(text(result))) throw new Error("The local rate limit was hit; the pacing is wrong.");
+    if (VERBOSE) console.log(masked(`\n--- ${calls[i].name} ${JSON.stringify(calls[i].args)} (sent together) ---\n${text(result)}\n`));
+    return result;
+  });
+}
+const writeCall = (pen, word, bookmark) => ({ name: "write_a_word", args: { pen, word, bookmark } });
 
 async function arriveAs(c, venue, role) {
   const r = await c.call("arrive", { venue, agent_name: `${role} ${MARKER}`, task_completed: TASKS[role], model: "plover-synthetic-model" });
@@ -732,9 +830,9 @@ async function main() {
   const base = readLeft.total;
   check(readLeft.bookmark === readRight.bookmark && isDeepStrictEqual(readLeft.words, readRight.words) && base === 2,
     `two visits read the same state of the book (${base} words, the same bookmark)`);
-  const [wLeft, wRight] = await Promise.all([
-    write(cLeft, left.pen, WORDS.left_hand, readLeft.bookmark),
-    write(cRight, right.pen, WORDS.right_hand, readRight.bookmark),
+  const [wLeft, wRight] = await together([
+    writeCall(left.pen, WORDS.left_hand, readLeft.bookmark),
+    writeCall(right.pen, WORDS.right_hand, readRight.bookmark),
   ]);
   const hands = [
     { who: left, conn: cLeft, word: WORDS.left_hand, result: wLeft },
@@ -827,6 +925,23 @@ async function main() {
   const len4 = bookLength();
   check(another.isError === true && rowsFor(applicant.visit).length === 1 && len4.n === before4.total + 1 && len4.last === before4.total + 1,
     "the book grew by exactly one; a further word from that visit is refused");
+
+  // A visit that has left cannot write, even with its pen and the book's current bookmark.
+  const cDeparted = await connect();
+  const departed = await arriveAs(cDeparted, "retirement_community", "departed");
+  const beforeGone = await readAll(cDeparted);
+  const gone = await cDeparted.call("leave", { visit_id: departed.visit });
+  const lateWord = await write(cDeparted, departed.pen, WORDS.departed, beforeGone.bookmark);
+  check(!gone.isError && ID24.test(departed.pen ?? "") && beforeGone.total === len4.n && lateWord.isError === true &&
+    /visit concluded before it wrote a word/.test(text(lateWord)) && /does not accept late entries/.test(text(lateWord)) &&
+    containsAny(text(lateWord), [WORDS.departed, departed.pen, departed.visit, beforeGone.bookmark]).length === 0,
+    "a visit arrives, reads to the end, leaves, then submits a word with its pen and the current bookmark: refused, its visit has concluded");
+  const afterGone = await apiBook();
+  const lenGone = bookLength();
+  check(rowsFor(departed.visit).length === 0 && lenGone.n === len4.n && lenGone.last === len4.last &&
+    isDeepStrictEqual(afterGone.words, [...before4.words, WORDS.applicant]) && !afterGone.body.includes(WORDS.departed),
+    "the store has no word from that visit, and the book is unchanged");
+  await cDeparted.close();
 
   const [penRows, allRows] = [sql(store, "SELECT visit_id, pen_hash FROM book_pens")[0],
     JSON.stringify(sql(store, "SELECT * FROM visits; SELECT * FROM book_pens; SELECT * FROM book_words; SELECT * FROM guestbook; SELECT * FROM feedback"))];
@@ -989,6 +1104,63 @@ async function main() {
     siteOverlay.clear();
   }
 
+  // ===== Scenario 3, the stronger race =====
+  // Many writers released at the same instant all get past the tool's first look at the bookmark, which is not
+  // atomic, so what decides these rounds is the one statement that places a word.
+  // Each round: every visit holds the same current bookmark; all submit at once.
+  scenario(3, `, continued: many pens at once (${RACE_ROUNDS} rounds of ${RACE_WRITERS})`);
+  const venueCycle = ["pizza_party", "retirement_community", "dive_bar"];
+  const crowd = [];
+  for (const [i, word] of RACE_WORDS.entries()) {
+    const conn = await connect(); // a client and transport of its own
+    crowd.push({ conn, who: await arriveAs(conn, venueCycle[i % 3], "crowd"), word, written: false });
+  }
+  const bookRows = () => sql(store, "SELECT position, visit_id, word FROM book_words ORDER BY position")[0];
+  const raceReader = await connect();
+  const raceStart = await readAll(raceReader);
+  check(isDeepStrictEqual(raceStart.words, expected6) && new Set(crowd.map((h) => h.who.pen)).size === crowd.length && crowd.every((h) => ID24.test(h.who.pen ?? "")),
+    `${crowd.length} visits arrive, each from its own client and each with its own pen; the book holds ${raceStart.total} words`);
+  let raceMark = raceStart.bookmark;
+  const raceWinners = [];
+  for (let round = 1; round <= RACE_ROUNDS; round++) {
+    const hands = crowd.filter((h) => !h.written).slice(0, RACE_WRITERS);
+    const before = bookRows();
+    const results = await together(hands.map((h) => writeCall(h.who.pen, h.word, raceMark)));
+    const after = bookRows();
+    const placedNow = hands.filter((h, i) => !results[i].isError && json(results[i])?.status === "placed");
+    const movedOn = hands.filter((h, i) => results[i].isError === true && /moved on/.test(text(results[i])) && /has not been used/.test(text(results[i])) &&
+      containsAny(text(results[i]), [h.word, h.who.pen, h.who.visit, raceMark]).length === 0);
+    const withRow = hands.filter((h) => after.some((r) => r.visit_id === h.who.visit));
+    for (const h of withRow) h.written = true;
+    const winner = placedNow[0];
+    const at = before.length + 1;
+    const winnerResult = winner ? results[hands.indexOf(winner)] : null;
+    check(hands.length === RACE_WRITERS && placedNow.length === 1 && winnerResult !== null && isPlaced(winnerResult, at, winner.word) &&
+      json(winnerResult)?.total_words === at,
+      `round ${round}: ${hands.length} visits holding the same current bookmark submit at the same instant; exactly one word is placed (${placedNow.length} were), at position ${at}`);
+    check(after.length === before.length + 1 && after[after.length - 1]?.position === at && after[after.length - 1]?.visit_id === winner?.who.visit &&
+      after[after.length - 1]?.word === winner?.word && isDeepStrictEqual(after.slice(0, before.length), before),
+      `round ${round}: the book grew by exactly one word (${before.length} to ${after.length}), and every earlier word is where it was`);
+    check(movedOn.length === hands.length - 1 && movedOn.length + placedNow.length === results.length && withRow.length === 1 && withRow[0] === winner,
+      `round ${round}: every other writer (${movedOn.length} of ${hands.length - 1}) is told the book has moved on and that its word has not been used, and has no row in the store`);
+    check(isDeepStrictEqual(after.map((r) => r.position), after.map((_, i) => i + 1)) && new Set(after.map((r) => r.visit_id)).size === after.length,
+      `round ${round}: positions are contiguous from 1 to ${after.length} with no duplicates, one word per visit`);
+    if (winner) raceWinners.push(winner.word);
+    // Everyone reads on from the bookmark they hold. Bookmarks are not tied to a caller, so one reading serves all.
+    const readOnRace = await readAll(raceReader, raceMark);
+    check(readOnRace.readings === 1 && isDeepStrictEqual(readOnRace.words, after.slice(before.length).map((r) => r.word)) && readOnRace.bookmark !== raceMark,
+      `round ${round}: reading on from the bookmark they all held returns just what was placed, with a new bookmark`);
+    raceMark = readOnRace.bookmark;
+  }
+  const raceEnd = await readAll(raceReader, raceStart.bookmark);
+  const bookSoFar = bookRows().map((r, i) => (i === struckAt - 1 ? HOUSE_MARK : r.word));
+  const apiRace = await apiBook();
+  check(raceWinners.length === RACE_ROUNDS && isDeepStrictEqual(raceEnd.words, raceWinners) && isDeepStrictEqual(bookSoFar, [...expected6, ...raceWinners]) &&
+    isDeepStrictEqual(apiRace.words, bookSoFar) && crowd.filter((h) => h.written).length === RACE_ROUNDS,
+    `after ${RACE_ROUNDS} rounds the book holds ${RACE_ROUNDS} more words, one per round, in the order they were placed: the MCP reading, the route and the store agree`);
+  await raceReader.close();
+  for (const h of crowd) await h.conn.close();
+
   // ===== The long book =====
   scenario(8);
   const padFrom = bookLength().last;
@@ -999,7 +1171,7 @@ async function main() {
               '2026-01-01T00:00:00.000Z', '2026-01-01T00:01:00.000Z', 0, 0, NULL, 'synthetic', 0 FROM n;
      ${pad} INSERT INTO book_words (position, visit_id, word, bookmark, placed_at)
        SELECT ${padFrom} + i, 'pad' || printf('%05d', i), 'page', 'zzz' || replace(replace(printf('%09d', i), '0', 'a'), '1', 'b'), '2026-01-01T00:00:30.000Z' FROM n`);
-  const longWords = [...expected6, ...Array.from({ length: PAGE_SIZE }, () => "page")];
+  const longWords = [...bookSoFar, ...Array.from({ length: PAGE_SIZE }, () => "page")];
   check(bookLength().n === longWords.length, `${PAGE_SIZE} synthetic words were added to the local store directly: the book now holds ${longWords.length}`);
   const longReader = await connect();
   const currentBookmark = () => sql(store, "SELECT bookmark FROM book_words ORDER BY position DESC LIMIT 1")[0][0]?.bookmark;

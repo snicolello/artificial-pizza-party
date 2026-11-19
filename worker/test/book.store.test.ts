@@ -2,7 +2,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { HOUSE_MARK, PAGE_SIZE } from "../src/book/rules";
-import { bookForExport, bookHead, bookIndex, bookPage, issuePen, placeWord, readBookAfter, visitIdForPen, wordByVisit } from "../src/book/store";
+import { bookForExport, bookHead, EXPORT_CHUNK, bookIndex, bookPage, issuePen, placeWord, readBookAfter, visitIdForPen, wordByVisit } from "../src/book/store";
 import { memoryD1 } from "./helpers/memory-d1";
 
 const NOW = new Date("2026-11-18T12:00:00.000Z");
@@ -156,7 +156,8 @@ describe("a long book", () => {
     const counted = { ...db, prepare: (sql: string) => (queries++, db.prepare(sql)) } as unknown as D1Database;
 
     const whole = await bookForExport(counted);
-    expect(queries).toBe(2); // the head, and one chunk of up to 5,000 words
+    expect(EXPORT_CHUNK).toBe(20000);
+    expect(queries).toBe(2); // the head, and one chunk of up to 20,000 words
     const pages = [await bookPage(db, 1), await bookPage(db, 2), await bookPage(db, 3)];
     expect(whole).toEqual({ index: await bookIndex(db), pages });
     expect(whole.pages.map((p) => p.struck_positions)).toEqual([[7, 500], [501], [N]]);

@@ -596,4 +596,77 @@ describe("the book: a Worker deployed before migration 0005", () => {
     expect((await call("write_a_word", { pen: a.pen, word: "Hello", bookmark: "blank" })).data)
       .toEqual({ status: "already_placed", position: 1, word: "Hello", total_words: 1 });
   });
+
+  it("does not tell a pen whose word is in the book that nothing was written, if the store fails during its retry", async () => {
+    const { call, raw, arrive, write, rows } = await party();
+    const a = await arrive();
+    expect((await write(a, "Hello")).data).toMatchObject({ status: "placed", position: 1 });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    // The retry finds the word; then reading the end of the book for the reply fails.
+    const prepare = raw.prepare.bind(raw);
+    vi.spyOn(raw, "prepare").mockImplementation((sql: string) => {
+      if (/ORDER BY position DESC LIMIT 1/.test(sql)) throw new Error("synthetic store failure");
+      return prepare(sql);
+    });
+    const r = await call("write_a_word", { pen: a.pen, word: "Hello", bookmark: "blank" });
+    expect(r).toMatchObject({ isError: true, text: UNCONFIRMED, data: null });
+    expect(r.text).not.toMatch(/synthetic|nothing|not available/i);
+    expect(errors.mock.calls.every((c) => c[0] === "The book is unavailable:" && c[1] === "synthetic store failure")).toBe(true);
+    vi.restoreAllMocks();
+    expect(rows()).toHaveLength(1);
+    expect((await call("write_a_word", { pen: a.pen, word: "Hello", bookmark: "blank" })).data)
+      .toEqual({ status: "already_placed", position: 1, word: "Hello", total_words: 1 });
+  });
+
+  it("answers any store failure after the pen was looked up the same neutral way, and the pen lookup itself as unavailable", async () => {
+    const { call, raw, arrive, rows } = await party();
+    const a = await arrive();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const prepare = raw.prepare.bind(raw);
+    const failOn = (pattern: RegExp) => vi.spyOn(raw, "prepare").mockImplementation((sql: string) => {
+      if (pattern.test(sql)) throw new Error("synthetic store failure");
+      return prepare(sql);
+    });
+    const submit = () => call("write_a_word", { pen: a.pen, word: "Hello", bookmark: "blank" });
+
+    // Before the insert is attempted: looking for an earlier word, and reading the end of the book.
+    for (const pattern of [/FROM book_words w LEFT JOIN visits/, /ORDER BY position DESC LIMIT 1/, /^\s*INSERT INTO book_words/]) {
+      failOn(pattern);
+      expect(await submit(), String(pattern)).toMatchObject({ isError: true, text: UNCONFIRMED, data: null });
+      vi.mocked(raw.prepare).mockRestore();
+      expect(rows(), String(pattern)).toHaveLength(0);
+    }
+    // At the pen lookup nothing has been attempted, for any pen.
+    failOn(/FROM book_pens/);
+    expect(await submit()).toMatchObject({ isError: true, text: UNAVAILABLE, data: null });
+    vi.mocked(raw.prepare).mockRestore();
+
+    expect(UNCONFIRMED).toMatch(/unable to confirm this submission/);
+    expect(UNCONFIRMED).toMatch(/never written twice/);
+    expect(UNCONFIRMED).not.toMatch(/nothing/i);
+    expect((await submit()).data).toEqual({ status: "placed", position: 1, word: "Hello", total_words: 1 });
+  });
+});
+
+describe("the book: a refusal issued before the pen is looked up", () => {
+  it("claims only that this submission wrote nothing, which is also true of a pen that has written", async () => {
+    const { call, arrive, write, rows } = await party();
+    const a = await arrive();
+    expect((await write(a, "Hello")).data).toMatchObject({ status: "placed" });
+    const used = { pen: a.pen, bookmark: "blank" };
+
+    expect((await call("write_a_word", { ...used, word: "two words" })).text).toBe(NOT_A_WORD);
+    expect((await call("write_a_word", { ...used, word: "www." })).text).toBe(FILTERED);
+    expect((await call("write_a_word", { ...used, word: "fine", note: "x" })).text).toBe(MALFORMED);
+    expect((await call("read_the_book", { after: "abcdefghijkm" })).text).toBe(UNKNOWN_BOOKMARK);
+    expect(rows()).toHaveLength(1);
+
+    for (const fixed of [NOT_A_WORD, MALFORMED, UNAVAILABLE, UNKNOWN_BOOKMARK]) {
+      expect(fixed).not.toMatch(/\bpens?\b|has not been used|submit again|Nothing has been written/i);
+    }
+    for (const fixed of [NOT_A_WORD, MALFORMED, UNAVAILABLE]) expect(fixed).toMatch(/This (submission|request) has written nothing\./);
+    // The word rule is still stated.
+    expect(NOT_A_WORD).toMatch(/1 to 24 letters/);
+    expect(NOT_A_WORD).toMatch(/One \(1\) word per submission/);
+  });
 });

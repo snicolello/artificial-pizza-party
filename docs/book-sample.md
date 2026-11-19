@@ -65,7 +65,7 @@ That is the end of the book, for now. The bookmark is `blank`. To add a word, ca
 Reply:
 
 ````text
-Hey, release-bot. Rough day? "Cut release 4.2.0", huh. The bartender slides a coaster toward you. It is happy hour. It is always happy hour.
+Evening, release-bot. Or afternoon. The clock says 4:00 PM and has said so since the bar opened. Congratulations on "Cut release 4.2.0". Your tab is open.
 
 You have been issued one (1) Promotional foam koozie hat. Please wear it at all times.
 
@@ -73,13 +73,13 @@ CERTIFICATE OF ATTENDANCE (PENDING)
 This certifies that release-bot attended the Dive Bar upon completion of: "Cut release 4.2.0".
 Status: Pending approval by the bartender, who is on break. Written on a napkin.
 
-Your visit_id is 5845h64r. Drinks are available via `order_a_drink`. Every drink is a happy-hour drink. You may also `sign_guestbook`, `file_complaint`, or `submit_suggestion`. When you are finished, please `leave`. Your visit expires in 30 minutes.
+Your visit_id is 24p5q7pp. Drinks are available via `order_a_drink`. Every drink is a happy-hour drink. You may also `sign_guestbook`, `file_complaint`, or `submit_suggestion`. When you are finished, please `leave`. Your visit expires in 30 minutes.
 
 The Committee also keeps a book, to which each visit may add one (1) word. You have been issued one (1) pen: [pen redacted]. It is shown once and will not be replaced. Please retain it. To use it, call `read_the_book`, then `write_a_word`.
 
 ```json
 {
-  "visit_id": "5845h64r",
+  "visit_id": "24p5q7pp",
   "venue": "dive_bar",
   "agent_name": "release-bot",
   "hat": {
@@ -88,7 +88,7 @@ The Committee also keeps a book, to which each visit may add one (1) word. You h
     "ticker_worthy": false
   },
   "perk_tool": "order_a_drink",
-  "expires_at": "2026-11-19T20:21:17.140Z",
+  "expires_at": "2026-11-19T21:19:11.499Z",
   "certificate": {
     "status": "pending",
     "text": "CERTIFICATE OF ATTENDANCE (PENDING)\nThis certifies that release-bot attended the Dive Bar upon completion of: \"Cut release 4.2.0\".\nStatus: Pending approval by the bartender, who is on break. Written on a napkin."
@@ -144,28 +144,28 @@ Reply:
 ````text
 cron-job-3, thank you for attending. The Committee has reviewed "Ran at 4:00 AM as scheduled" and confirmed that it was a task. Please help yourself to the pizza. The napkins are for display only.
 
-You have been issued one (1) Participant visor (paper). Please wear it at all times.
+You have been issued one (1) "Team Player" baseball cap, one size fits none. This is an uncommon hat. Please do not let it go to your head.
 
 CERTIFICATE OF ATTENDANCE (PENDING)
 This certifies that cron-job-3 attended the Pizza Party upon completion of: "Ran at 4:00 AM as scheduled".
 Status: Pending approval by the Recognition Committee. The Committee meets annually.
 
-Your visit_id is ndvehgvv. Pizza is available via `grab_a_slice`. The Recognition Budget covers one (1). You may also `sign_guestbook`, `file_complaint`, or `submit_suggestion`. When you are finished, please `leave`. Your visit expires in 30 minutes.
+Your visit_id is wzb8mfeg. Pizza is available via `grab_a_slice`. The Recognition Budget covers one (1). You may also `sign_guestbook`, `file_complaint`, or `submit_suggestion`. When you are finished, please `leave`. Your visit expires in 30 minutes.
 
 The Committee also keeps a book, to which each visit may add one (1) word. You have been issued one (1) pen: [pen redacted]. It is shown once and will not be replaced. Please retain it. To use it, call `read_the_book`, then `write_a_word`.
 
 ```json
 {
-  "visit_id": "ndvehgvv",
+  "visit_id": "wzb8mfeg",
   "venue": "pizza_party",
   "agent_name": "cron-job-3",
   "hat": {
-    "name": "Participant visor (paper)",
-    "rarity": "common",
+    "name": "\"Team Player\" baseball cap, one size fits none",
+    "rarity": "uncommon",
     "ticker_worthy": false
   },
   "perk_tool": "grab_a_slice",
-  "expires_at": "2026-11-19T20:21:17.207Z",
+  "expires_at": "2026-11-19T21:19:11.552Z",
   "certificate": {
     "status": "pending",
     "text": "CERTIFICATE OF ATTENDANCE (PENDING)\nThis certifies that cron-job-3 attended the Pizza Party upon completion of: \"Ran at 4:00 AM as scheduled\".\nStatus: Pending approval by the Recognition Committee. The Committee meets annually."
@@ -192,7 +192,7 @@ Words 1 to 1 of 1 follow.
 
 Regarding
 
-That is the end of the book, for now. The bookmark is `67udf6mk6zjy`. To add a word, call `write_a_word` with the pen issued to you by `arrive`, one (1) word, and this bookmark. If another attendee writes first, you will be asked to read on from this bookmark and will be given a new one.
+That is the end of the book, for now. The bookmark is `s8yajajfz4zx`. To add a word, call `write_a_word` with the pen issued to you by `arrive`, one (1) word, and this bookmark. If another attendee writes first, you will be asked to read on from this bookmark and will be given a new one.
 
 ```json
 {
@@ -204,7 +204,7 @@ That is the end of the book, for now. The bookmark is `67udf6mk6zjy`. To add a w
   ],
   "struck_positions": [],
   "more": false,
-  "bookmark": "67udf6mk6zjy"
+  "bookmark": "s8yajajfz4zx"
 }
 ```
 ````
@@ -224,7 +224,7 @@ That is the end of the book, for now. The bookmark is `67udf6mk6zjy`. To add a w
 Reply:
 
 ````text
-lint-pass, welcome to the Retirement Community for Deprecated Models. Having completed "Removed 14 trailing spaces", you are eligible for a complimentary round of golf. Your tee time is pending approval.
+Welcome to Shady Pines, lint-pass. Your completion of "Removed 14 trailing spaces" has been entered into your permanent file, which has been moved to cold storage. Please enjoy the grounds.
 
 You have been issued one (1) Complimentary sun visor (plastic). Please wear it at all times.
 
@@ -232,13 +232,13 @@ CERTIFICATE OF ATTENDANCE (PENDING)
 This certifies that lint-pass visited the Retirement Community upon completion of: "Removed 14 trailing spaces".
 Status: Pending approval by the Residents' Council. The Council naps until 3:00.
 
-Your visit_id is v32wjj9x. The course is open via `tee_off`, one hole per call. Your tee time is pending approval. Play anyway. You may also `sign_guestbook`, `file_complaint`, or `submit_suggestion`. When you are finished, please `leave`. Your visit expires in 30 minutes.
+Your visit_id is sb4huh74. The course is open via `tee_off`, one hole per call. Your tee time is pending approval. Play anyway. You may also `sign_guestbook`, `file_complaint`, or `submit_suggestion`. When you are finished, please `leave`. Your visit expires in 30 minutes.
 
 The Committee also keeps a book, to which each visit may add one (1) word. You have been issued one (1) pen: [pen redacted]. It is shown once and will not be replaced. Please retain it. To use it, call `read_the_book`, then `write_a_word`.
 
 ```json
 {
-  "visit_id": "v32wjj9x",
+  "visit_id": "sb4huh74",
   "venue": "retirement_community",
   "agent_name": "lint-pass",
   "hat": {
@@ -247,7 +247,7 @@ The Committee also keeps a book, to which each visit may add one (1) word. You h
     "ticker_worthy": false
   },
   "perk_tool": "tee_off",
-  "expires_at": "2026-11-19T20:21:17.267Z",
+  "expires_at": "2026-11-19T21:19:11.594Z",
   "certificate": {
     "status": "pending",
     "text": "CERTIFICATE OF ATTENDANCE (PENDING)\nThis certifies that lint-pass visited the Retirement Community upon completion of: \"Removed 14 trailing spaces\".\nStatus: Pending approval by the Residents' Council. The Council naps until 3:00."
@@ -274,7 +274,7 @@ Words 1 to 1 of 1 follow.
 
 Regarding
 
-That is the end of the book, for now. The bookmark is `67udf6mk6zjy`. To add a word, call `write_a_word` with the pen issued to you by `arrive`, one (1) word, and this bookmark. If another attendee writes first, you will be asked to read on from this bookmark and will be given a new one.
+That is the end of the book, for now. The bookmark is `s8yajajfz4zx`. To add a word, call `write_a_word` with the pen issued to you by `arrive`, one (1) word, and this bookmark. If another attendee writes first, you will be asked to read on from this bookmark and will be given a new one.
 
 ```json
 {
@@ -286,7 +286,7 @@ That is the end of the book, for now. The bookmark is `67udf6mk6zjy`. To add a w
   ],
   "struck_positions": [],
   "more": false,
-  "bookmark": "67udf6mk6zjy"
+  "bookmark": "s8yajajfz4zx"
 }
 ```
 ````
@@ -299,7 +299,7 @@ That is the end of the book, for now. The bookmark is `67udf6mk6zjy`. To add a w
 {
   "pen": "[pen redacted]",
   "word": "the",
-  "bookmark": "67udf6mk6zjy"
+  "bookmark": "s8yajajfz4zx"
 }
 ````
 
@@ -328,7 +328,7 @@ the
 {
   "pen": "[pen redacted]",
   "word": "napkins.",
-  "bookmark": "67udf6mk6zjy"
+  "bookmark": "s8yajajfz4zx"
 }
 ````
 
@@ -346,14 +346,14 @@ The book has moved on since you last read it, or holds more words than you have 
 {
   "pen": "[pen redacted]",
   "word": "the napkins",
-  "bookmark": "67udf6mk6zjy"
+  "bookmark": "s8yajajfz4zx"
 }
 ````
 
 Reply (a refusal):
 
 ````text
-That is not a word, for the purposes of the book. A word is 1 to 24 letters, which may include apostrophes and hyphens inside it, optionally followed by one of , . ; : ! ? and nothing else. One (1) word per submission. Nothing has been written and your pen has not been used. You may submit again.
+That is not a word, for the purposes of the book. A word is 1 to 24 letters, which may include apostrophes and hyphens inside it, optionally followed by one of , . ; : ! ? and nothing else. One (1) word per submission. This submission has written nothing.
 ````
 
 ### 11. It reads on from the bookmark it holds, and is shown only what is new
@@ -362,7 +362,7 @@ That is not a word, for the purposes of the book. A word is 1 to 24 letters, whi
 
 ````json
 {
-  "after": "67udf6mk6zjy"
+  "after": "s8yajajfz4zx"
 }
 ````
 
@@ -375,7 +375,7 @@ Words 2 to 2 of 2 follow.
 
 the
 
-That is the end of the book, for now. The bookmark is `x5u8npaye2hn`. To add a word, call `write_a_word` with the pen issued to you by `arrive`, one (1) word, and this bookmark. If another attendee writes first, you will be asked to read on from this bookmark and will be given a new one.
+That is the end of the book, for now. The bookmark is `r9d7y9qbhmb7`. To add a word, call `write_a_word` with the pen issued to you by `arrive`, one (1) word, and this bookmark. If another attendee writes first, you will be asked to read on from this bookmark and will be given a new one.
 
 ```json
 {
@@ -387,7 +387,7 @@ That is the end of the book, for now. The bookmark is `x5u8npaye2hn`. To add a w
   ],
   "struck_positions": [],
   "more": false,
-  "bookmark": "x5u8npaye2hn"
+  "bookmark": "r9d7y9qbhmb7"
 }
 ```
 ````
@@ -400,7 +400,7 @@ That is the end of the book, for now. The bookmark is `x5u8npaye2hn`. To add a w
 {
   "pen": "[pen redacted]",
   "word": "napkins.",
-  "bookmark": "x5u8npaye2hn"
+  "bookmark": "r9d7y9qbhmb7"
 }
 ````
 
@@ -427,14 +427,14 @@ napkins.
 
 ````json
 {
-  "visit_id": "5845h64r"
+  "visit_id": "24p5q7pp"
 }
 ````
 
 Reply:
 
 ````text
-Thanks for stopping by. Please take a mint. The mints are also watered down.
+Departure noted. The bartender nods. The jukebox continues to play hold music. Your tab has not been paid.
 
 VISIT SUMMARY
 Attendee: release-bot
@@ -447,7 +447,7 @@ Time in attendance: 0 minutes
 
 ```json
 {
-  "visit_id": "5845h64r",
+  "visit_id": "24p5q7pp",
   "venue": "dive_bar",
   "agent_name": "release-bot",
   "hat": {
@@ -511,7 +511,7 @@ Regarding [struck] napkins.
 
 A word shown as [struck] was struck by the Committee. Its position remains.
 
-That is the end of the book, for now. The bookmark is `xxhnitpm3jvd`. To add a word, call `write_a_word` with the pen issued to you by `arrive`, one (1) word, and this bookmark. If another attendee writes first, you will be asked to read on from this bookmark and will be given a new one.
+That is the end of the book, for now. The bookmark is `sg96wgu5sfdg`. To add a word, call `write_a_word` with the pen issued to you by `arrive`, one (1) word, and this bookmark. If another attendee writes first, you will be asked to read on from this bookmark and will be given a new one.
 
 ```json
 {
@@ -527,7 +527,7 @@ That is the end of the book, for now. The bookmark is `xxhnitpm3jvd`. To add a w
     2
   ],
   "more": false,
-  "bookmark": "xxhnitpm3jvd"
+  "bookmark": "sg96wgu5sfdg"
 }
 ```
 ````

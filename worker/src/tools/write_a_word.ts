@@ -11,13 +11,14 @@ import { fill, refusal, reply } from "../lib/text";
 
 const ADVERTISED = advertised(writeInput);
 
-// Every refusal below is fixed text and free: nothing is written and the pen is not used.
-// None of them repeats anything the caller sent.
+// Every refusal below is fixed text and free: the submission it answers writes nothing and uses nothing up.
+// None of them repeats anything the caller sent. A refusal issued before the pen is looked up (NOT_A_WORD, the
+// filter's, the malformed one) claims nothing about the pen: it may be one that has already written its word.
 
 export const NOT_A_WORD =
   "That is not a word, for the purposes of the book. A word is 1 to 24 letters, which may include apostrophes " +
   "and hyphens inside it, optionally followed by one of , . ; : ! ? and nothing else. One (1) word per submission. " +
-  "Nothing has been written and your pen has not been used. You may submit again.";
+  "This submission has written nothing.";
 
 export const UNKNOWN_PEN =
   "The Committee has no record of that pen. Pens are issued once, by `arrive`, and are not transferable. " +
@@ -37,8 +38,10 @@ export const MOVED_ON =
   "read on until the reply says there is no more, then resubmit with the new bookmark.";
 
 /**
- * Only if the store fails after a word may have been placed. The same submission again is the retry, which
- * reports the position if the word is there.
+ * The reply to any store failure once the pen has been looked up. By then the pen's visit may already have a
+ * word in the book (a retry), or the word may have gone in just before the failure, so this claims neither
+ * that something was written nor that nothing was. The same submission again is the retry, which reports the
+ * position if the word is there.
  */
 export const UNCONFIRMED =
   "The book was unable to confirm this submission. Submit it again, exactly as before, to learn whether your " +
@@ -76,13 +79,18 @@ export function registerWriteAWord(server: McpServer, ctx: PartyContext): void {
 
       const db = ctx.env.DB;
       const now = ctx.now();
-      // Set just before the one statement that writes, so a failure can be reported truthfully.
-      let attempted = false;
-      try {
-        // The pen is the only credential. Only the arrive reply ever contained it.
-        const visitId = await visitIdForPen(db, await hashPen(pen));
-        if (!visitId) return refusal(UNKNOWN_PEN);
 
+      // The pen is the only credential. Only the arrive reply ever contained it.
+      // A failure here is before anything has been attempted, so UNAVAILABLE (this request wrote nothing) is true.
+      let visitId: string | null;
+      try {
+        visitId = await visitIdForPen(db, await hashPen(pen));
+      } catch (err) {
+        return unavailable(err);
+      }
+      if (!visitId) return refusal(UNKNOWN_PEN);
+
+      try {
         /** The reply for a visit that has a word: the same word again is the retry; any other is refused. */
         const settled = async (existing: { position: number; word: string; struck: boolean }, placedNow: boolean) => {
           if (existing.word !== word) return refusal(fill(ALREADY_WRITTEN, { position: existing.position }));
@@ -109,7 +117,6 @@ export function registerWriteAWord(server: McpServer, ctx: PartyContext): void {
         if (head.bookmark !== bookmark) return refusal(MOVED_ON);
 
         // The open visit, the bookmark and the one word per visit are all checked again inside this statement.
-        attempted = true;
         const placed = await placeWord(
           db,
           { visit_id: visitId, word, expected_bookmark: bookmark, new_bookmark: newId(12) },
@@ -119,8 +126,10 @@ export function registerWriteAWord(server: McpServer, ctx: PartyContext): void {
         if (after) return await settled(after, placed);
         return refusal((await bookHead(db)).bookmark !== bookmark ? MOVED_ON : VISIT_CONCLUDED);
       } catch (err) {
-        const refused = unavailable(err); // logs the cause either way
-        return attempted ? refusal(UNCONFIRMED) : refused;
+        // From here on the pen's visit may already have a word in the book, whether or not this call placed
+        // it, so the answer must not say that nothing was written. The cause is logged, never returned.
+        unavailable(err);
+        return refusal(UNCONFIRMED);
       }
     },
   );

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { BOOK_UNAVAILABLE, handlePublicApi, NO_SUCH_PAGE } from "../src/api";
 import { HOUSE_MARK, PAGE_SIZE } from "../src/book/rules";
 import type { Env } from "../src/context";
-import { buildSnapshot } from "../src/export";
+import { buildSnapshot, runExport, snapshot } from "../src/export";
 import { memoryD1 } from "./helpers/memory-d1";
 
 const PLACED_AT = "2026-11-18T12:34:56.789Z";
@@ -192,6 +192,57 @@ describe("the export", () => {
     expect(errors).toHaveBeenCalledTimes(1);
     expect(errors.mock.calls[0]?.[0]).toBe("The book was left out of the export:");
     expect(typeof errors.mock.calls[0]?.[1]).toBe("string"); // the message only, not the error object
+  });
+
+  it("says the book was left out: in the snapshot's notice and in the export's result, committed or not", async () => {
+    const { db, raw } = memoryD1();
+    fill(raw, 3);
+    expect(await snapshot(db)).toEqual({ files: await buildSnapshot(db), left_out: [] });
+
+    // GitHub, as far as runExport needs it. The tree it is given decides whether there is anything to commit.
+    const github = (treeSha: string) =>
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const path = String(input).replace(/^https:\/\/api\.github\.com\/repos\/synthetic\/repo/, "");
+        const method = init?.method ?? "GET";
+        if (method === "GET" && path === "/git/ref/heads/main") return Response.json({ object: { sha: "parent-commit" } });
+        if (method === "GET" && path === "/git/commits/parent-commit") return Response.json({ tree: { sha: "parent-tree" } });
+        if (method === "POST" && path === "/git/trees") return Response.json({ sha: treeSha });
+        if (method === "POST" && path === "/git/commits") return Response.json({ sha: "new-commit" });
+        if (method === "PATCH" && path === "/git/refs/heads/main") return Response.json({});
+        return new Response("unexpected", { status: 500 });
+      });
+    const env = { DB: db, GITHUB_TOKEN: "synthetic-token", GITHUB_REPO: "synthetic/repo", EXPORT_AUTHOR_EMAIL: "committee@example.com" } as unknown as Env;
+
+    // With the book readable, neither result mentions an omission.
+    github("new-tree");
+    const whole = await runExport(env);
+    expect(whole).toEqual({ committed: true, commit: "new-commit", files: Object.keys(await buildSnapshot(db)).length + 1 });
+    expect("left_out" in whole).toBe(false);
+    vi.restoreAllMocks();
+    github("parent-tree");
+    const unchanged = await runExport(env);
+    expect(unchanged).toMatchObject({ committed: false });
+    expect("left_out" in unchanged).toBe(false);
+    vi.restoreAllMocks();
+
+    dropBook(raw);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const partial = await snapshot(db);
+    expect(partial.left_out).toEqual(["book"]);
+    expect(Object.keys(partial.files).filter((p) => /^data\/book/.test(p))).toEqual([]);
+    expect(partial.files).toEqual(await buildSnapshot(db)); // the dry run's files map, unchanged in shape
+
+    github("new-tree");
+    const committed = await runExport(env);
+    expect(committed).toEqual({ committed: true, commit: "new-commit", files: Object.keys(partial.files).length + 1, left_out: ["book"] });
+    vi.mocked(globalThis.fetch).mockRestore();
+    github("parent-tree");
+    const skipped = await runExport(env);
+    expect(skipped).toEqual({ committed: false, reason: "No changes since the last export.", files: Object.keys(partial.files).length, left_out: ["book"] });
+    // The nightly log line is the result as JSON, so it shows the omission.
+    expect(JSON.stringify(skipped)).toContain('"left_out":["book"]');
+    expect(errors.mock.calls.every((c) => c[0] === "The book was left out of the export:" && typeof c[1] === "string")).toBe(true);
+    expect(errors).toHaveBeenCalledTimes(4);
   });
 
   it("exports a 1,203-word book as the routes serve it, without a query per page", async () => {

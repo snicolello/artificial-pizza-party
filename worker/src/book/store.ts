@@ -131,8 +131,8 @@ export async function bookPage(db: D1Database, page: number): Promise<BookPage |
   return { page, from, to, total_words, words, struck_positions };
 }
 
-/** How many words one query reads for the export. */
-export const EXPORT_CHUNK = 5000;
+/** How many words one query reads for the export. A row is a word of at most 25 characters, so a chunk is small. */
+export const EXPORT_CHUNK = 20000;
 
 /**
  * The whole book as the public routes serve it: the index and every page, for the export. The head is read

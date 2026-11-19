@@ -34,7 +34,7 @@ const counts = (raw: DatabaseSync) =>
   raw.prepare("SELECT (SELECT COUNT(*) FROM visits) AS visits, (SELECT COUNT(*) FROM book_words) AS words").get();
 
 describe("a batch refused for a malformed call to a book tool", () => {
-  it("gives the book's refusal to the book's calls only, a neutral line to the others, and runs nothing", async () => {
+  it("gives the book's refusal to the malformed book calls only, a neutral line to every other call, and runs nothing", async () => {
     const { raw, post } = mcp();
     const arrive = toolCall(1, "arrive", { venue: "dive_bar", agent_name: `agent ${MARKER}`, task_completed: `task ${MARKER}` });
     const res = await post(JSON.stringify([
@@ -45,15 +45,19 @@ describe("a batch refused for a malformed call to a book tool", () => {
       toolCall(4, "read_the_book", {}),
       toolCall(5, "write_a_word", { pen: "abcdefghijkmnpqrstuvwxyz", word: "fine", bookmark: "blank", note: MARKER }),
       toolCall(6, "agentin_feed", {}),
+      toolCall(7, "write_a_word", { pen: "abcdefghijkmnpqrstuvwxyz", word: "fine", bookmark: "blank" }),
+      toolCall(8, "read_the_book", "junk"),
     ]));
     expect(res.status).toBe(200);
     expect(res.json).toEqual([
       refusedWith(1, BATCH_NOT_PROCESSED),
       refusedWith(2, MALFORMED),
       refusedWith(3, BATCH_NOT_PROCESSED),
-      refusedWith(4, MALFORMED),
+      refusedWith(4, BATCH_NOT_PROCESSED), // a well-formed call to a book tool: nothing was wrong with its form
       refusedWith(5, MALFORMED),
       refusedWith(6, BATCH_NOT_PROCESSED),
+      refusedWith(7, BATCH_NOT_PROCESSED),
+      refusedWith(8, MALFORMED),
     ]);
     expect(res.body).not.toContain(MARKER);
     expect(BATCH_NOT_PROCESSED).not.toMatch(/book|pen|field/i);

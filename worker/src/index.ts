@@ -1,7 +1,7 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { agentinCallIsAcceptable, REJECTED } from "./agentin/input";
 import { handlePublicApi } from "./api";
-import { BATCH_NOT_PROCESSED, bookCallIsAcceptable, isBookCall, MALFORMED } from "./book/input";
+import { BATCH_NOT_PROCESSED, bookCallIsAcceptable, MALFORMED } from "./book/input";
 import type { Env } from "./context";
 import { listFeedback } from "./db";
 import { buildSnapshot, runExport } from "./export";
@@ -128,9 +128,10 @@ async function rateLimitToolCalls(request: Request, env: Env, ipHash: string): P
  *
  * The book's two tools are strict in the same way and are checked the same way (see bookCallIsAcceptable),
  * with the book's own fixed refusal. A batch that is malformed for both gets the AgentIn one, exactly as
- * above. A batch refused only because of a malformed call to a book tool is answered per call: the calls to
- * the book's tools get the book's refusal, and every other tool call in it gets a neutral line, since the
- * book's copy (about fields and pens) would not be true of them. Nothing in the batch runs either way.
+ * above. A batch refused only because of a malformed call to a book tool is answered per call: each malformed
+ * call to a book tool gets the book's refusal, and every other tool call in it, a well-formed call to a book
+ * tool included, gets a neutral line, since the book's copy (about the fields it accepts) would not be true
+ * of them. Nothing in the batch runs either way.
  */
 async function rejectMalformedStrictCalls(request: Request): Promise<Response | null> {
   if (request.method !== "POST") return null;
@@ -143,7 +144,7 @@ async function rejectMalformedStrictCalls(request: Request): Promise<Response | 
   const messages: unknown[] = Array.isArray(body) ? body : [body];
   const agentinRefused = !messages.every(agentinCallIsAcceptable);
   if (!agentinRefused && messages.every(bookCallIsAcceptable)) return null;
-  const textFor = (m: unknown) => (agentinRefused ? REJECTED : isBookCall(m) ? MALFORMED : BATCH_NOT_PROCESSED);
+  const textFor = (m: unknown) => (agentinRefused ? REJECTED : bookCallIsAcceptable(m) ? BATCH_NOT_PROCESSED : MALFORMED);
 
   const toolCalls = messages.filter((m) => isToolCall(m)) as { id?: unknown }[];
   const results = toolCalls.map((m) => ({
