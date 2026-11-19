@@ -175,6 +175,46 @@ describe("the Book: one word each, and refusals are free", () => {
     expect((await p.write(pen, "d")).data).toMatchObject({ status: "written", position: 4 });
   });
 
+  it("refuses a filtered word dressed in apostrophes or hyphens, at no cost", async () => {
+    const p = await party();
+    const { pen } = await p.arrive();
+    for (const word of ["s'h'i't", "sh-it", "a's's"]) {
+      const r = await p.write(pen, word);
+      expect(r.isError, word).toBe(true);
+      expect(r.text, word).toMatch(/community standards/);
+    }
+    expect(p.count("book_words")).toBe(0);
+    expect((await p.write(pen, "don't")).data).toMatchObject({ status: "written", position: 1 });
+  });
+
+  it("refuses the last letter of a run even when an unrelated letter precedes it", async () => {
+    const p = await party();
+    for (const letter of ["k", "a", "s"]) expect((await p.write((await p.arrive()).pen, letter)).isError).toBe(false);
+    const { pen } = await p.arrive();
+    expect((await p.write(pen, "s")).text).toMatch(/community standards/);
+    expect((await p.write(pen, "k")).data).toMatchObject({ status: "written", position: 4 });
+  });
+
+  it("does not let a visit that is already hidden write, and takes no position for it", async () => {
+    const p = await party();
+    await p.write((await p.arrive()).pen, "one");
+    const hidden = await p.arrive();
+    hide(p.raw, hidden.visit);
+    const r = await p.write(hidden.pen, "two");
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/unable to accept a word from this visit\. Nothing has been written/);
+    expect(p.count("book_words")).toBe(1);
+    expect((await p.read()).next_position).toBe(2);
+    // The insert itself refuses a hidden visit too, whatever the tool checked first.
+    const { insertWord } = await import("../src/db");
+    expect(await insertWord(p.db, { visit_id: hidden.visit, word: "two", position: 2 }, new Date(p.clock.ms))).toBe(false);
+    // A visit hidden after it wrote can still ask where its word stands.
+    const wrote = await p.arrive();
+    await p.write(wrote.pen, "two");
+    hide(p.raw, wrote.visit);
+    expect((await p.call("add_a_word", { pen: wrote.pen, word: "two", position: 2 })).data).toMatchObject({ status: "already_written", position: 2 });
+  });
+
   it("needs an open visit: a pen whose visit left or expired without writing is refused", async () => {
     const p = await party();
     const left = await p.arrive();

@@ -2,7 +2,7 @@
 // and the raw-body check. No server.
 import { describe, expect, it } from "vitest";
 import { BOOK_FIELDS, bookCallIsAcceptable, PEN_PATTERN, readInput, writeInput } from "../src/book/input";
-import { BOOK_PAGE_SIZE, bookPage, pageCount, shapePage, STRUCK_MARK } from "../src/book/pages";
+import { allBookPages, BOOK_PAGE_SIZE, bookPage, pageCount, shapePage, STRUCK_MARK } from "../src/book/pages";
 import { isWord, wordMeetsCommunityStandards } from "../src/book/word";
 import { memoryD1 } from "./helpers/memory-d1";
 
@@ -51,6 +51,23 @@ describe("the filter, applied to a word", () => {
     expect(wordMeetsCommunityStandards("d", ["the", "f", "u", "c"])).toBe(true);
   });
 
+  it.each(["s'h'i't", "sh'it", "f'u'c'k", "a's's", "b'i't'c'h", "c'u'n't", "sh-it", "bi-tch", "f-u-c-k", "s-h-i-t", "fu'ck", "sh-it!"])(
+    "sees through the apostrophes and hyphens the Book allows inside a word: refuses %j", (word) => {
+      expect(isWord(word)).toBe(true);
+      expect(wordMeetsCommunityStandards(word)).toBe(false);
+    });
+
+  it.each(["don't", "mother-in-law", "rock-'n'-roll", "it's", "well-read", "o'clock", "pass-through", "class-action"])(
+    "still accepts ordinary words with apostrophes and hyphens: %j", (word) => {
+      expect(wordMeetsCommunityStandards(word)).toBe(true);
+    });
+
+  it("is not thrown off by an unrelated short word just before a letter-per-word run", () => {
+    expect(wordMeetsCommunityStandards("s", ["the", "k", "a", "s"])).toBe(false);
+    expect(wordMeetsCommunityStandards("k", ["I", "f", "u", "c"])).toBe(false);
+    expect(wordMeetsCommunityStandards("t.", ["S.", "h.", "i."])).toBe(false);
+  });
+
   it("does not hold words already in the book against the next one", () => {
     expect(wordMeetsCommunityStandards("and", ["oh", "shit"])).toBe(true);
   });
@@ -86,6 +103,11 @@ describe("pages", () => {
     expect(shapePage(3, 1, [{ position: 1, word: "one" }, { position: 3, word: "three" }]).words).toEqual(["one", STRUCK_MARK, "three"]);
   });
 
+  it("reads the empty book in bulk as one empty page", async () => {
+    const { db } = memoryD1();
+    expect(await allBookPages(db)).toEqual([shapePage(0, 1, [])]);
+  });
+
   it("the mark is not a word, so it cannot be mistaken for one or submitted as one", () => {
     expect(isWord(STRUCK_MARK)).toBe(false);
   });
@@ -113,6 +135,10 @@ describe("pages", () => {
       read.push(...page!.words);
     }
     expect(read).toEqual(expected);
+    // The export reads the same pages in bulk.
+    const all = await allBookPages(db);
+    expect(all).toHaveLength(3);
+    for (const page of all) expect(page).toEqual(await bookPage(db, page.page));
     expect(await bookPage(db, 4)).toBeNull();
     expect(await bookPage(db, 0)).toBeNull();
     expect(await bookPage(db, 1.5)).toBeNull();

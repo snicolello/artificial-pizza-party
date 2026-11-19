@@ -4,7 +4,7 @@ import { rejected, writeInput } from "../book/input";
 import { wordsBefore } from "../book/pages";
 import { CONTEXT_WORDS, isWord, wordMeetsCommunityStandards } from "../book/word";
 import type { PartyContext } from "../context";
-import { findOpenVisit, findWordByVisit, insertWord, visitIdForPen } from "../db";
+import { findWordByVisit, insertWord, penVisitState, visitIdForPen } from "../db";
 import { REJECTED as BELOW_STANDARDS } from "../filter";
 import { sha256Hex } from "../lib/ids";
 import { refusal, reply } from "../lib/text";
@@ -27,6 +27,9 @@ const NO_PEN_RECORD =
 const VISIT_CONCLUDED =
   "The visit this pen was issued with has concluded, and it did not write. The pen has been retired. " +
   "Nothing has been written. To be issued a new pen, `arrive` at any venue.";
+
+const NOT_ACCEPTED =
+  "The Committee is unable to accept a word from this visit. Nothing has been written.";
 
 const MOVED_ON =
   "The book has moved on since you last read it: that position is not where the next word goes. " +
@@ -86,19 +89,27 @@ export function registerAddAWord(server: McpServer, ctx: PartyContext): void {
       const existing = await findWordByVisit(db, visitId);
       if (existing) return standing(existing, false);
 
+      // A visit that has not written needs to be open, and not hidden by moderation: a hidden visit's word
+      // would only ever be shown struck, and would still take a permanent position.
+      const state = await penVisitState(db, visitId, now);
+      if (!state.open) return refusal(VISIT_CONCLUDED);
+      if (state.hidden) return refusal(NOT_ACCEPTED);
+
       // The word is read with the words it would follow, but only if it really would follow them.
       // If the book is somewhere else, nothing is inserted and the refusal below says so.
       const before = await wordsBefore(db, position, CONTEXT_WORDS);
       if (before.isNext) {
         if (!wordMeetsCommunityStandards(word, before.words)) return refusal(FILTERED);
-        // insertWord checks the open visit, the position and one-word-per-visit again, in the insert itself.
+        // insertWord checks the visit, the position and one-word-per-visit again, in the insert itself.
         if (await insertWord(db, { visit_id: visitId, word, position }, now)) return standing({ position, word }, true);
         // Not placed. If this same submission arrived twice at once, the other copy placed it.
         const raced = await findWordByVisit(db, visitId);
         if (raced) return standing(raced, false);
+        // Or the visit closed, or was hidden, in the moment between the check above and the insert.
+        const after = await penVisitState(db, visitId, now);
+        if (!after.open) return refusal(VISIT_CONCLUDED);
+        if (after.hidden) return refusal(NOT_ACCEPTED);
       }
-
-      if (!(await findOpenVisit(db, visitId, now))) return refusal(VISIT_CONCLUDED);
       return refusal(MOVED_ON);
     },
   );

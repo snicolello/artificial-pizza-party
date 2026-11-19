@@ -15,7 +15,7 @@
 // and so on to the last page, so the whole book is in the export). The book_* tables are never exported:
 // they hold which visit wrote which word, and the pen hashes.
 import { agentinFeed } from "./agentin/feed";
-import { bookPage } from "./book/pages";
+import { allBookPages } from "./book/pages";
 import { hallOfHats, plaques, stats, ticker } from "./api";
 import type { Env } from "./context";
 import { recentGuestbook } from "./db";
@@ -43,11 +43,8 @@ export async function buildSnapshot(db: D1Database): Promise<Record<string, stri
   // Page 1 mirrors /api/book. Later pages mirror /api/book/{page}. A struck word is exported as the mark.
   // If the book cannot be read (e.g. the Worker deployed before migration 0005), the rest is still exported.
   try {
-    const opening = await bookPage(db, 1);
-    if (opening) files["data/book.json"] = opening;
-    for (let page = 2; page <= (opening?.pages ?? 1); page++) {
-      const next = await bookPage(db, page);
-      if (next) files[`data/book/${page}.json`] = next;
+    for (const page of await allBookPages(db)) {
+      files[page.page === 1 ? "data/book.json" : `data/book/${page.page}.json`] = page;
     }
   } catch (err) {
     console.error("The Book was not exported:", err instanceof Error ? err.message : "unknown error");

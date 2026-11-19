@@ -51,7 +51,8 @@ export function registerReadTheBook(server: McpServer, ctx: PartyContext): void 
               ...(page.struck.length ? [STRUCK_NOTE.replace("{mark}", page.mark)] : []),
               next,
             ];
-      // next_position is given only where the book ends, so that a writer has to arrive there by reading.
+      // next_position is spelled out only where the book ends, to lead a writer there by reading. It is not a
+      // secret: every page carries `length`, so the server cannot tell whether a writer read the pages between.
       return reply(lines.join("\n\n"), { ...page, next_position: last ? page.length + 1 : null });
     },
   );

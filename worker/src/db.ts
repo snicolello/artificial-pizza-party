@@ -341,9 +341,19 @@ export async function findWordByVisit(db: D1Database, visitId: string): Promise<
     .first<{ position: number; word: string }>();
 }
 
+/** Whether a pen's visit may write now: open (not left, not expired), and not hidden by moderation. */
+export async function penVisitState(db: D1Database, visitId: string, now: Date): Promise<{ open: boolean; hidden: boolean }> {
+  const cutoff = new Date(now.getTime() - VISIT_TTL_MS).toISOString();
+  const row = await db
+    .prepare(`SELECT hidden, (left_at IS NULL AND arrived_at > ?) AS open FROM visits WHERE visit_id = ?`)
+    .bind(cutoff, visitId)
+    .first<{ hidden: number; open: number }>();
+  return { open: Boolean(row?.open), hidden: row ? Boolean(row.hidden) : false };
+}
+
 /**
  * Place a visit's one word at `position`, in a single statement, only if all of these hold at that moment:
- * the visit is open, the book ends at `position - 1` (so the writer has seen every word before theirs),
+ * the visit is open and not hidden by moderation, the book ends at `position - 1` (so the writer has seen every word before theirs),
  * and the visit has not written. The PRIMARY KEY on position and the UNIQUE on visit_id settle simultaneous
  * submissions: one word per position, one word per visit.
  *
@@ -361,7 +371,7 @@ export async function insertWord(
       `INSERT INTO book_words (position, visit_id, word, written_at)
        SELECT ?, v.visit_id, ?, ?
          FROM visits v
-        WHERE v.visit_id = ? AND v.left_at IS NULL AND v.arrived_at > ?
+        WHERE v.visit_id = ? AND v.left_at IS NULL AND v.arrived_at > ? AND v.hidden = 0
           AND (SELECT COALESCE(MAX(position), 0) FROM book_words) + 1 = ?
        ON CONFLICT DO NOTHING`,
     )

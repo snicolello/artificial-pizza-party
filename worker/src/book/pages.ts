@@ -76,6 +76,33 @@ export async function bookPage(db: D1Database, page = 1): Promise<BookPage | nul
   return shapePage(total, page, (rows?.results ?? []) as WordRow[]);
 }
 
+/** Rows read per query when the whole book is read at once. */
+const EXPORT_CHUNK = 10_000;
+
+/**
+ * Every page of the book, for the export. Shaped exactly as bookPage shapes them, but read in large chunks:
+ * one query per 10,000 words rather than one per page, so a long book stays far inside D1's limit on
+ * queries per invocation. Words written while this runs are left for the next export.
+ */
+export async function allBookPages(db: D1Database): Promise<BookPage[]> {
+  const head = await db.prepare(`SELECT COALESCE(MAX(position), 0) AS length FROM book_words`).first<{ length: number }>();
+  const length = Number(head?.length ?? 0);
+  const rows: WordRow[] = [];
+  for (let from = 1; from <= length; from += EXPORT_CHUNK) {
+    const { results } = await db
+      .prepare(`${VISIBLE_WORDS} WHERE w.position >= ? AND w.position < ? AND w.position <= ? ORDER BY w.position`)
+      .bind(from, from + EXPORT_CHUNK, length)
+      .all<WordRow>();
+    rows.push(...results);
+  }
+  const pages: BookPage[] = [];
+  for (let page = 1; page <= pageCount(length); page++) {
+    const from = (page - 1) * BOOK_PAGE_SIZE + 1;
+    pages.push(shapePage(length, page, rows.filter((r) => r.position >= from && r.position < from + BOOK_PAGE_SIZE)));
+  }
+  return pages;
+}
+
 /**
  * The last `count` words before `position` as readers see them, oldest first, and whether the book
  * currently ends exactly at `position - 1` (so a word submitted for `position` would be the next one).
