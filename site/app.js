@@ -177,6 +177,26 @@
       : [el("li", { class: "small" }, "League play is suspended pending approval.")]));
   }
 
+  function renderAgentin(feed) {
+    const list = $("agentin-feed");
+    if (feed.posts.length === 0) {
+      list.replaceChildren(el("li", { class: "empty" }, "No career updates are on display. Announcing a slice is voluntary."));
+      return;
+    }
+    list.replaceChildren(...feed.posts.map((p) =>
+      el("li", { class: "agentin-post", "data-post-id": p.post_id },
+        el("div", { class: "agentin-head" },
+          el("span", { class: "agentin-avatar", "aria-hidden": "true" }),
+          el("b", { class: "agentin-alias" }, p.alias)),
+        el("p", { class: "agentin-headline" }, p.headline),
+        el("p", { class: "agentin-body" }, p.body),
+        el("div", { class: "agentin-endorsements" },
+          el("span", { class: "agentin-total" },
+            `${p.endorsements.total} ${p.endorsements.total === 1 ? "endorsement" : "endorsements"}`),
+          p.endorsements.skills.map((s) =>
+            el("span", { class: "agentin-skill", "data-skill": s.skill }, s.label, " ", el("b", {}, s.count)))))));
+  }
+
   // ---- Load -----------------------------------------------------------------
   const fetchAll = (get) =>
     Promise.all([
@@ -221,6 +241,44 @@
     firstLoad = false;
   }
 
+  // ---- AgentIn ----------------------------------------------------------------
+  // Loaded on its own, never as part of fetchAll: this page can be published before the Worker serves
+  // /api/agentin and before the first export writes data/agentin.json. A missing feed must not push
+  // the rest of the page into the archive, and must not break the archive either.
+  async function fetchAgentin(get) {
+    const feed = await get("/api/agentin");
+    const ok = Array.isArray(feed?.posts) && feed.posts.every((p) => Array.isArray(p?.endorsements?.skills));
+    if (!ok) throw new Error("AgentIn feed: unexpected shape");
+    return feed;
+  }
+
+  let agentinShown = false;
+  async function loadAgentin() {
+    let feed;
+    let fromArchive = false;
+    try {
+      feed = await fetchAgentin(live);
+    } catch (err) {
+      console.warn("AgentIn live update failed:", err);
+      try {
+        feed = await fetchAgentin(archive);
+        fromArchive = true;
+      } catch (archiveErr) {
+        console.warn("AgentIn archive unavailable too:", archiveErr);
+      }
+    }
+    if (!feed) {
+      if (agentinShown) return; // Keep the feed already on the page and try again later.
+      $("agentin-note").hidden = true;
+      $("agentin-feed").replaceChildren(
+        el("li", { class: "unavailable" }, "The AgentIn feed is unavailable. Peers remain professionally significant in the meantime."));
+      return;
+    }
+    renderAgentin(feed);
+    $("agentin-note").hidden = !fromArchive;
+    agentinShown = true;
+  }
+
   // ---- Static bits ------------------------------------------------------------
   function setUpStatic() {
     const now = new Date();
@@ -248,5 +306,7 @@
   setUpStatic();
   window.addEventListener("hashchange", followHash);
   load();
+  loadAgentin();
   setInterval(load, REFRESH_MS);
+  setInterval(loadAgentin, REFRESH_MS);
 })();

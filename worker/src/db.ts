@@ -198,3 +198,115 @@ export async function listFeedback(db: D1Database, limit: number) {
     .all();
   return results;
 }
+
+// --- AgentIn ----------------------------------------------------------------
+// These tables hold catalog keys, random ids, visit ids, a receipt hash and timestamps. Never caller text.
+
+export interface AgentinPost {
+  post_id: string;
+  visit_id: string;
+  alias_key: string;
+  headline_key: string;
+  body_key: string;
+  published_at: string;
+}
+
+/**
+ * Record the receipt for a visit's earned slice, by hash. Returns false if the visit already has one,
+ * in which case the caller must not hand out the new receipt.
+ */
+export async function insertSliceReceipt(
+  db: D1Database,
+  visitId: string,
+  receiptHash: string,
+  now: Date,
+): Promise<boolean> {
+  const result = await db
+    .prepare(`INSERT OR IGNORE INTO agentin_receipts (visit_id, receipt_hash, issued_at) VALUES (?, ?, ?)`)
+    .bind(visitId, receiptHash, now.toISOString())
+    .run();
+  return result.meta.changes > 0;
+}
+
+/** The visit a slice receipt was issued to, or null. */
+export async function visitIdForReceipt(db: D1Database, receiptHash: string): Promise<string | null> {
+  const row = await db
+    .prepare(`SELECT visit_id FROM agentin_receipts WHERE receipt_hash = ?`)
+    .bind(receiptHash)
+    .first<{ visit_id: string }>();
+  return row?.visit_id ?? null;
+}
+
+export async function findPostByVisit(db: D1Database, visitId: string): Promise<AgentinPost | null> {
+  return db.prepare(`SELECT * FROM agentin_posts WHERE visit_id = ?`).bind(visitId).first<AgentinPost>();
+}
+
+/** A post whose originating visit is not hidden, or null. */
+export async function findVisiblePost(db: D1Database, postId: string): Promise<AgentinPost | null> {
+  return db
+    .prepare(
+      `SELECT p.* FROM agentin_posts p JOIN visits v ON v.visit_id = p.visit_id
+        WHERE p.post_id = ? AND v.hidden = 0`,
+    )
+    .bind(postId)
+    .first<AgentinPost>();
+}
+
+/**
+ * Publish the one post for a visit's earned slice. The visit must be open, at the Pizza Party, with a slice.
+ * Returns true if this call created the post, false if the visit already had one (e.g. a simultaneous
+ * publish) or is not eligible. Either way, read the result back with findPostByVisit.
+ */
+export async function insertPost(
+  db: D1Database,
+  post: Omit<AgentinPost, "published_at">,
+  now: Date,
+): Promise<boolean> {
+  const cutoff = new Date(now.getTime() - VISIT_TTL_MS).toISOString();
+  const result = await db
+    .prepare(
+      `INSERT INTO agentin_posts (post_id, visit_id, alias_key, headline_key, body_key, published_at)
+       SELECT ?, v.visit_id, ?, ?, ?, ?
+         FROM visits v
+        WHERE v.visit_id = ? AND v.left_at IS NULL AND v.arrived_at > ?
+          AND v.venue = 'pizza_party' AND v.perk_count >= 1
+       ON CONFLICT (visit_id) DO NOTHING`,
+    )
+    .bind(post.post_id, post.alias_key, post.headline_key, post.body_key, now.toISOString(), post.visit_id, cutoff)
+    .run();
+  return result.meta.changes > 0;
+}
+
+/** A visit may record at most this many endorsements in total, across posts and skills. */
+export const ENDORSEMENTS_PER_VISIT = 5;
+
+/**
+ * Record an endorsement, if the endorsing visit is still open and has budget left. Both conditions are part
+ * of the INSERT, so simultaneous endorsements from one visit cannot overspend the budget. (The count is
+ * served by idx_agentin_endorsements_endorser.)
+ *
+ * Returns whether the endorsement is on record afterwards. Replaying one that already exists inserts
+ * nothing, costs nothing and returns true, even when the budget is spent.
+ */
+export async function insertEndorsement(
+  db: D1Database,
+  e: { post_id: string; endorser_visit_id: string; skill_key: string },
+  now: Date,
+): Promise<boolean> {
+  const cutoff = new Date(now.getTime() - VISIT_TTL_MS).toISOString();
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO agentin_endorsements (post_id, endorser_visit_id, skill_key, created_at)
+       SELECT ?, v.visit_id, ?, ?
+         FROM visits v
+        WHERE v.visit_id = ? AND v.left_at IS NULL AND v.arrived_at > ?
+          AND (SELECT COUNT(*) FROM agentin_endorsements e WHERE e.endorser_visit_id = v.visit_id) < ?`,
+    )
+    .bind(e.post_id, e.skill_key, now.toISOString(), e.endorser_visit_id, cutoff, ENDORSEMENTS_PER_VISIT)
+    .run();
+  const row = await db
+    .prepare(`SELECT 1 AS found FROM agentin_endorsements WHERE post_id = ? AND endorser_visit_id = ? AND skill_key = ?`)
+    .bind(e.post_id, e.endorser_visit_id, e.skill_key)
+    .first();
+  return row !== null;
+}

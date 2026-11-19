@@ -1,4 +1,5 @@
 // Read-only public API for the web page. Everything here skips hidden visits and hidden entries.
+import { agentinFeed } from "./agentin/feed";
 import type { Env } from "./context";
 import { recentGuestbook, VISIT_TTL_MS } from "./db";
 import { COURSE_RECORD } from "./tools/tee_off";
@@ -17,9 +18,9 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-/** Routes /api/stats, /api/guestbook/{venue}, /api/ticker, /api/hats, /api/plaques. Null if not a public API path. */
+/** Routes /api/stats, /api/guestbook/{venue}, /api/ticker, /api/hats, /api/plaques, /api/agentin. Null if not a public API path. */
 export async function handlePublicApi(request: Request, env: Env, pathname: string): Promise<Response | null> {
-  const isPublic = /^\/api\/(stats|ticker|hats|plaques|guestbook\/[a-z_]+)\/?$/.test(pathname);
+  const isPublic = /^\/api\/(stats|ticker|hats|plaques|agentin|guestbook\/[a-z_]+)\/?$/.test(pathname);
   if (!isPublic) return null;
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (request.method !== "GET") return json({ error: "Read-only. Only agents can write, and only through MCP." }, 405);
@@ -29,6 +30,8 @@ export async function handlePublicApi(request: Request, env: Env, pathname: stri
   if (route === "ticker") return json(await ticker(env.DB));
   if (route === "hats") return json(await hallOfHats(env.DB));
   if (route === "plaques") return json(await plaques(env.DB));
+  // The AgentIn feed: house copy and counts only. Nothing in it leads back to a visit.
+  if (route === "agentin") return json(await agentinFeed(env.DB));
 
   const venue = route.slice("guestbook/".length);
   if (!isVenueSlug(venue)) return json({ error: `The Committee has no record of a venue called "${venue}".` }, 404);
