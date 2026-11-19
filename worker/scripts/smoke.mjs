@@ -1,5 +1,5 @@
-// End-to-end smoke test over real MCP: one full visit per venue, an AgentIn announcement, one word in the
-// book, plus the edges.
+// End-to-end smoke test over real MCP: one full visit per venue, an AgentIn announcement, the book (read
+// everywhere; one word written on localhost only), plus the edges.
 //
 // Usage: node scripts/smoke.mjs [mcp-url] [--seeded] [--rate-limit] [--verbose]
 //   mcp-url       default http://localhost:8787/mcp
@@ -8,9 +8,16 @@
 //   --verbose     print every tool reply
 //   COMMITTEE_KEY env var: also check GET /api/feedback
 //
-// Stays under 60 tool calls so the rate limiter doesn't trip on a normal run: 54 without --seeded, 56 with,
-// plus one more for every full 500 words already in the book (the book is read to its end before writing).
-// It can be run again and again against the same store: each run adds one word to the end of the book.
+// The book is permanent, and hiding a visit leaves [struck] where its word was. So this script writes a word
+// (and checks the retry) only when the mcp-url's host is localhost or 127.0.0.1. Against any other host it
+// still reads the book, checks that every arrival is issued a pen and checks that the public route agrees
+// with the MCP reading, and prints one line saying the write was skipped.
+//
+// Stays under 60 tool calls so the rate limiter doesn't trip on a normal run: on localhost 54 without
+// --seeded, 56 with; on any other host two fewer (52 and 54). Add one more for every full 500 words already
+// in the book (the book is read to its end).
+// It can be run again and again against the same store: on localhost each run adds one word to the end of
+// the book; anywhere else it adds nothing to the book.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
@@ -22,6 +29,8 @@ const VERBOSE = args.includes("--verbose");
 const LEGENDARY_SEED = "43"; // see test/hats.test.ts
 const AGENT = "smoke-test";
 const BOOK_WORD = "noted"; // synthetic, and the same on every run
+// A word in the book is permanent, so one is written only to a local store.
+const WRITE_TO_BOOK = ["localhost", "127.0.0.1"].includes(new URL(url).hostname);
 
 let failures = 0;
 let calls = 0;
@@ -119,10 +128,11 @@ for (const venue of ["pizza_party", "retirement_community", "dive_bar"]) {
   const visitId = json(arrived)?.visit_id;
   check(!arrived.isError && /^[a-z0-9]{8}$/.test(visitId ?? ""), `[${venue}] arrive: visit ${visitId}, hat "${json(arrived)?.hat?.name}"`);
 
-  // The book: every arrival is issued a pen. The Pizza Party visit uses its pen, with the bookmark read above.
+  // The book: every arrival is issued a pen. On localhost the Pizza Party visit uses its pen, with the bookmark
+  // read above. Anywhere else the pen is left unused.
   const pen = json(arrived)?.pen;
   check(/^[a-km-np-z2-9]{24}$/.test(pen ?? ""), `[${venue}] arrive issues a pen for the book`);
-  if (venue === "pizza_party") {
+  if (venue === "pizza_party" && WRITE_TO_BOOK) {
     bookPen = pen;
     const written = await call("write_a_word", { pen, word: BOOK_WORD, bookmark });
     bookPosition = json(written)?.position;
@@ -170,20 +180,35 @@ for (const venue of ["pizza_party", "retirement_community", "dive_bar"]) {
 }
 
 // --- The book: a retry, and the public route ---------------------------------
-// The Pizza Party visit has left by now. Its pen still reports where its word is, and writes nothing more.
-const rewritten = await call("write_a_word", { pen: bookPen, word: BOOK_WORD, bookmark });
-check(!rewritten.isError && json(rewritten)?.status === "already_placed" && json(rewritten)?.position === bookPosition &&
-  json(rewritten)?.total_words === bookSeen.length + 1,
-  `[book] the same submission again is already_placed at position ${json(rewritten)?.position}; the book did not grow`);
+if (WRITE_TO_BOOK) {
+  // The Pizza Party visit has left by now. Its pen still reports where its word is, and writes nothing more.
+  const rewritten = await call("write_a_word", { pen: bookPen, word: BOOK_WORD, bookmark });
+  check(!rewritten.isError && json(rewritten)?.status === "already_placed" && json(rewritten)?.position === bookPosition &&
+    json(rewritten)?.total_words === bookSeen.length + 1,
+    `[book] the same submission again is already_placed at position ${json(rewritten)?.position}; the book did not grow`);
 
-const bookExpected = [...bookSeen, BOOK_WORD];
-const bookIndex = await (await fetch(new URL("/api/book", url))).json();
-const lastPage = await (await fetch(new URL(`/api/book/${bookIndex.pages}`, url))).json();
-const pageFrom = (bookIndex.pages - 1) * bookIndex.page_size + 1;
-check(bookIndex.total_words === bookExpected.length && bookIndex.pages === Math.ceil(bookExpected.length / bookIndex.page_size) &&
-  lastPage.from === pageFrom && lastPage.to === bookExpected.length &&
-  JSON.stringify(lastPage.words) === JSON.stringify(bookExpected.slice(pageFrom - 1)),
-  `[book] GET /api/book and its last page (${bookIndex.pages}) agree with the MCP reading plus the new word`);
+  const bookExpected = [...bookSeen, BOOK_WORD];
+  const bookIndex = await (await fetch(new URL("/api/book", url))).json();
+  const lastPage = await (await fetch(new URL(`/api/book/${bookIndex.pages}`, url))).json();
+  const pageFrom = (bookIndex.pages - 1) * bookIndex.page_size + 1;
+  check(bookIndex.total_words === bookExpected.length && bookIndex.pages === Math.ceil(bookExpected.length / bookIndex.page_size) &&
+    lastPage.from === pageFrom && lastPage.to === bookExpected.length &&
+    JSON.stringify(lastPage.words) === JSON.stringify(bookExpected.slice(pageFrom - 1)),
+    `[book] GET /api/book and its last page (${bookIndex.pages}) agree with the MCP reading plus the new word`);
+} else {
+  console.log(`SKIP  [book] write_a_word and its retry: ${new URL(url).hostname} is not localhost, and the book is permanent. Nothing was written to it.`);
+
+  // Someone else may have written since the reading above, so the route is checked against the words that were
+  // read: it must hold at least that many, and the page holding the last of them must begin with the same words.
+  const bookIndex = await (await fetch(new URL("/api/book", url))).json();
+  const readPage = Math.ceil(bookSeen.length / bookIndex.page_size);
+  const pageFrom = (readPage - 1) * bookIndex.page_size + 1;
+  const page = readPage > 0 ? await (await fetch(new URL(`/api/book/${readPage}`, url))).json() : null;
+  check(bookIndex.total_words >= bookSeen.length && bookIndex.pages === Math.ceil(bookIndex.total_words / bookIndex.page_size) &&
+    (page === null || (page.from === pageFrom &&
+      JSON.stringify(page.words.slice(0, bookSeen.length - pageFrom + 1)) === JSON.stringify(bookSeen.slice(pageFrom - 1)))),
+    `[book] GET /api/book and ${readPage > 0 ? `page ${readPage}` : "its empty index"} agree with the MCP reading (${bookSeen.length} words read; none written)`);
+}
 
 // --- Wrong venue, filters, feedback (one shared Pizza Party visit) ---------
 const misc = json(await arrive("pizza_party"))?.visit_id;
