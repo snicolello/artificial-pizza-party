@@ -1,8 +1,8 @@
 // The book in public: the read-only routes and the export files that mirror them, against the real
 // migrations. Synthetic visits only.
 import type { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
-import { handlePublicApi, NO_SUCH_PAGE } from "../src/api";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { BOOK_UNAVAILABLE, handlePublicApi, NO_SUCH_PAGE } from "../src/api";
 import { HOUSE_MARK, PAGE_SIZE } from "../src/book/rules";
 import type { Env } from "../src/context";
 import { buildSnapshot } from "../src/export";
@@ -52,6 +52,11 @@ function expectNoPrivateDetail(text: string, n: number) {
   expect(text).not.toContain(ARRIVED_AT);
   for (const i of [1, n]) expect(text).not.toContain(visitId(i));
 }
+
+afterEach(() => vi.restoreAllMocks());
+
+/** As if the Worker were deployed before migration 0005. */
+const dropBook = (raw: DatabaseSync) => raw.exec("DROP TABLE book_words; DROP TABLE book_pens");
 
 describe("GET /api/book", () => {
   it("serves an empty book as an index with no pages, and has no page 1", async () => {
@@ -147,7 +152,77 @@ describe("GET /api/book", () => {
   });
 });
 
+describe("GET /api/book without the book's tables", () => {
+  it("answers 503 in fixed house copy, with no database error text, and leaves the other routes alone", async () => {
+    const { db, raw } = memoryD1();
+    fill(raw, 3);
+    dropBook(raw);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const get = api(db);
+    for (const path of ["/api/book", "/api/book/", "/api/book/1", "/api/book/2"]) {
+      const res = await get(path);
+      expect(res?.status, path).toBe(503);
+      expect(res?.json, path).toEqual({ error: BOOK_UNAVAILABLE });
+      expect(res?.body, path).not.toMatch(/no such table|book_words|SQL|sqlite/i);
+      expect(res?.headers.get("cache-control"), path).toBe("no-store");
+      expect(res?.headers.get("access-control-allow-origin"), path).toBe("*");
+    }
+    expect(errors).toHaveBeenCalledTimes(4);
+    expect(errors.mock.calls[0]?.[0]).toBe("The book is unavailable:");
+    // A page that could never exist is still a 404: it reads nothing.
+    expect((await get("/api/book/one"))?.status).toBe(404);
+    expect((await get("/api/stats"))?.status).toBe(200);
+    expect((await get("/api/agentin"))?.status).toBe(200);
+  });
+});
+
 describe("the export", () => {
+  it("leaves the book out, and exports everything else as before, when the book cannot be read", async () => {
+    const { db, raw } = memoryD1();
+    fill(raw, 3);
+    const withBook = await buildSnapshot(db);
+    dropBook(raw);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const files = await buildSnapshot(db);
+
+    expect(Object.keys(files).filter((p) => /^data\/book/.test(p))).toEqual([]);
+    const rest = Object.fromEntries(Object.entries(withBook).filter(([p]) => !/^data\/book/.test(p)));
+    expect(Object.keys(rest).length).toBe(Object.keys(withBook).length - 2);
+    expect(files).toEqual(rest);
+    expect(errors).toHaveBeenCalledTimes(1);
+    expect(errors.mock.calls[0]?.[0]).toBe("The book was left out of the export:");
+    expect(typeof errors.mock.calls[0]?.[1]).toBe("string"); // the message only, not the error object
+  });
+
+  it("exports a 1,203-word book as the routes serve it, without a query per page", async () => {
+    const N = 1203;
+    const { db, raw } = memoryD1();
+    fill(raw, N);
+    for (const i of [7, 500, 501, N]) strike(raw, i);
+    const get = api(db);
+
+    const bookQueries: string[] = [];
+    const counted = {
+      ...db,
+      prepare: (sql: string) => {
+        if (/book_words/.test(sql)) bookQueries.push(sql);
+        return db.prepare(sql);
+      },
+    } as unknown as D1Database;
+    const files = await buildSnapshot(counted);
+
+    expect(bookQueries).toHaveLength(2); // the head once, then every word in one position-ordered read
+    expect(Object.keys(files).filter((p) => /^data\/book/.test(p)).sort())
+      .toEqual(["data/book.json", "data/book/1.json", "data/book/2.json", "data/book/3.json"]);
+    expect(JSON.parse(files["data/book.json"]!)).toEqual((await get("/api/book"))?.json);
+    for (const n of [1, 2, 3]) {
+      // The same bytes the route would serve, pretty-printed: same fields in the same order.
+      expect(files[`data/book/${n}.json`], String(n)).toBe(`${JSON.stringify((await get(`/api/book/${n}`))?.json, null, 2)}\n`);
+    }
+    expect(JSON.parse(files["data/book/3.json"]!)).toMatchObject({ page: 3, from: 1001, to: N, total_words: N, struck_positions: [N] });
+    for (const text of Object.values(files)) expect(text).not.toMatch(/bkmark|penhash|bookmark|placed_at/);
+  });
+
   it("has an index and no pages for an empty book", async () => {
     const { db } = memoryD1();
     const files = await buildSnapshot(db);

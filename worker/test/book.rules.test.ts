@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BOOK_FIELDS, bookCallIsAcceptable, readInput, writeInput } from "../src/book/input";
+import { BOOK_FIELDS, bookCallIsAcceptable, isBookCall, readInput, writeInput } from "../src/book/input";
 import { BLANK_BOOKMARK, BOOKMARK_PATTERN, hashPen, HOUSE_MARK, isWord, PAGE_SIZE, PEN_PATTERN } from "../src/book/rules";
 import { newId } from "../src/lib/ids";
 
@@ -45,10 +45,12 @@ describe("pens and bookmarks", () => {
 describe("strict inputs", () => {
   const PEN = "abcdefghijkmnpqrstuvwxyz";
   it("take exactly their fields", () => {
-    expect(BOOK_FIELDS).toEqual({ read_the_book: ["from"], write_a_word: ["pen", "word", "bookmark"] });
+    expect(BOOK_FIELDS).toEqual({ read_the_book: ["after"], write_a_word: ["pen", "word", "bookmark"] });
     expect(readInput.safeParse({}).success).toBe(true);
-    expect(readInput.safeParse({ from: 501 }).success).toBe(true);
-    for (const bad of [{ from: 0 }, { from: -1 }, { from: 1.5 }, { from: "1" }, { from: null }, { page: 1 }, { from: 1, x: 1 }]) {
+    expect(readInput.safeParse({ after: "blank" }).success).toBe(true);
+    expect(readInput.safeParse({ after: "abcdefghijkm" }).success).toBe(true);
+    for (const bad of [{ from: 1 }, { from: 501 }, { after: 1 }, { after: null }, { after: "" }, { after: "abcdefgh" }, { after: "Blank" },
+      { page: 1 }, { after: "blank", from: 1 }, { after: "blank", x: 1 }]) {
       expect(readInput.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
     }
     expect(writeInput.safeParse({ pen: PEN, word: "anything at all", bookmark: "blank" }).success).toBe(true);
@@ -72,7 +74,7 @@ describe("the book's pre-check on the raw message", () => {
     expect(bookCallIsAcceptable(callOf("write_a_word", { pen: PEN, word: "a", bookmark: "blank" }))).toBe(true);
     expect(bookCallIsAcceptable(callOf("write_a_word", { word: 7 }))).toBe(true);
     expect(bookCallIsAcceptable(callOf("read_the_book", {}))).toBe(true);
-    expect(bookCallIsAcceptable(callOf("read_the_book", { from: 2 }))).toBe(true);
+    expect(bookCallIsAcceptable(callOf("read_the_book", { after: 2 }))).toBe(true);
     expect(bookCallIsAcceptable(raw(`{"name":"read_the_book"}`))).toBe(true);
   });
 
@@ -83,7 +85,18 @@ describe("the book's pre-check on the raw message", () => {
     expect(bookCallIsAcceptable(raw(`{"name":"read_the_book","arguments":{"__proto__":null}}`))).toBe(false);
     expect(bookCallIsAcceptable(callOf("write_a_word", { pen: PEN, word: "a", bookmark: "blank", note: "x" }))).toBe(false);
     expect(bookCallIsAcceptable(callOf("read_the_book", { toString: 1 }))).toBe(false);
+    expect(bookCallIsAcceptable(callOf("read_the_book", { from: 2 }))).toBe(false);
+    expect(bookCallIsAcceptable(callOf("read_the_book", { after: "blank", from: 2 }))).toBe(false);
     for (const args of [[], ["a"], "a", 7, true, null]) expect(bookCallIsAcceptable(callOf("write_a_word", args)), JSON.stringify(args)).toBe(false);
+  });
+
+  it("knows a call to a book tool from any other message", () => {
+    expect(isBookCall(callOf("read_the_book", { from: 2 }))).toBe(true);
+    expect(isBookCall(callOf("write_a_word", "junk"))).toBe(true);
+    expect(isBookCall(raw(`{"name":"read_the_book"}`))).toBe(true);
+    for (const other of [callOf("arrive", {}), callOf("toString", {}), callOf(7, {}), { jsonrpc: "2.0", id: 1, method: "tools/list" }, null, 7, []]) {
+      expect(isBookCall(other), JSON.stringify(other)).toBe(false);
+    }
   });
 
   it("leaves every other tool and message alone", () => {

@@ -4,12 +4,13 @@ import type { DatabaseSync } from "node:sqlite";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MALFORMED } from "../src/book/input";
+import { MALFORMED, UNAVAILABLE } from "../src/book/input";
 import { BOOKMARK_PATTERN, hashPen, HOUSE_MARK, PEN_PATTERN, WORD_PATTERN } from "../src/book/rules";
 import type { Env, PartyContext } from "../src/context";
 import { REJECTED as FILTERED } from "../src/filter";
 import { buildServer } from "../src/server";
-import { ALREADY_WRITTEN, MOVED_ON, NOT_A_WORD, UNKNOWN_PEN, VISIT_CONCLUDED } from "../src/tools/write_a_word";
+import { UNKNOWN_BOOKMARK } from "../src/tools/read_the_book";
+import { ALREADY_WRITTEN, MOVED_ON, NOT_A_WORD, UNCONFIRMED, UNKNOWN_PEN, VISIT_CONCLUDED } from "../src/tools/write_a_word";
 import { memoryD1 } from "./helpers/memory-d1";
 
 const MARKER = "HERON-MARKER-4410";
@@ -50,7 +51,12 @@ async function party() {
     expect(r.isError, r.text).toBe(false);
     return { visit: r.data?.visit_id as string, pen: r.data?.pen as string };
   };
-  const bookmark = async () => (await call("read_the_book")).data?.bookmark as string;
+  /** Read from the first word to the end, by bookmark; the bookmark of the last reading is the current one. */
+  const bookmark = async () => {
+    let r = await call("read_the_book");
+    while (r.data?.more) r = await call("read_the_book", { after: r.data.bookmark });
+    return r.data?.bookmark as string;
+  };
   /** Read to the end, then write. */
   const write = async (a: Attendee, word: string) => call("write_a_word", { pen: a.pen, word, bookmark: await bookmark() });
   const rows = () => raw.prepare("SELECT position, visit_id, word FROM book_words ORDER BY position").all() as { position: number; visit_id: string; word: string }[];
@@ -71,8 +77,8 @@ describe("the book: discovery", () => {
     const read = schema("read_the_book");
     expect(read.type).toBe("object");
     expect(read.additionalProperties).toBe(false);
-    expect(Object.keys(read.properties)).toEqual(["from"]);
-    expect(read.properties.from).toMatchObject({ type: "integer", minimum: 1 });
+    expect(Object.keys(read.properties)).toEqual(["after"]);
+    expect(read.properties.after).toMatchObject({ type: "string", pattern: BOOKMARK_PATTERN.source });
     expect(read.required ?? []).toEqual([]);
 
     const write = schema("write_a_word");
@@ -93,9 +99,9 @@ describe("the book: discovery", () => {
       (await call("read_the_book")).text,
       (await write(a, "Hello")).text,
       (await call("read_the_book")).text,
-      MALFORMED, NOT_A_WORD, UNKNOWN_PEN, ALREADY_WRITTEN, VISIT_CONCLUDED, MOVED_ON,
+      MALFORMED, NOT_A_WORD, UNKNOWN_PEN, ALREADY_WRITTEN, VISIT_CONCLUDED, MOVED_ON, UNKNOWN_BOOKMARK, UNAVAILABLE, UNCONFIRMED,
     ].join("\n");
-    expect(copy).not.toMatch(/\bapes?\b|monkey|typewriter|shakespeare|hamlet|bard|author|target|goal|hopes?\b|infinite|passage/i);
+    expect(copy).not.toMatch(/\bapes?\b|monkey|typewriter|shakespeare|hamlet|bard|author|target|goal|deadline|hopes?\b|infinite|passage/i);
   });
 });
 
@@ -144,9 +150,9 @@ describe("the book: the pen", () => {
 describe("the book: reading", () => {
   it("is blank at first, for a session with no visit, with or without arguments", async () => {
     const { call, rows } = await party();
-    for (const r of [await call("read_the_book"), await call("read_the_book", {}), await call("read_the_book", { from: 1 })]) {
+    for (const r of [await call("read_the_book"), await call("read_the_book", {}), await call("read_the_book", { after: "blank" })]) {
       expect(r.isError).toBe(false);
-      expect(r.data).toEqual({ total_words: 0, from: 1, to: 0, words: [], struck_positions: [], next_from: null, bookmark: "blank" });
+      expect(r.data).toEqual({ total_words: 0, from: 1, to: 0, words: [], struck_positions: [], more: false, bookmark: "blank" });
       expect(r.text).toMatch(/blank/);
       expect(r.text).toMatch(/write_a_word/);
     }
@@ -162,8 +168,8 @@ describe("the book: reading", () => {
 
     const other = await session();
     const r = await other.call("read_the_book");
-    expect(Object.keys(r.data ?? {})).toEqual(["total_words", "from", "to", "words", "struck_positions", "next_from", "bookmark"]);
-    expect(r.data).toMatchObject({ total_words: 1, from: 1, to: 1, words: ["Hello,"], struck_positions: [], next_from: null });
+    expect(Object.keys(r.data ?? {})).toEqual(["total_words", "from", "to", "words", "struck_positions", "more", "bookmark"]);
+    expect(r.data).toMatchObject({ total_words: 1, from: 1, to: 1, words: ["Hello,"], struck_positions: [], more: false });
     expect(r.data?.bookmark).toMatch(/^[a-km-np-z2-9]{12}$/);
     expect(r.text).toContain("Hello,");
     // No attribution: not the visit, the pen, the name, the task or a time.
@@ -175,17 +181,34 @@ describe("the book: reading", () => {
     }
   });
 
-  it("refuses a malformed reading in fixed text", async () => {
-    const { call } = await party();
-    for (const args of [{ from: 0 }, { from: -3 }, { from: 1.5 }, { from: "2" }, { from: null }, { page: 2 }, { from: 1, [MARKER]: MARKER }]) {
+  it("refuses a malformed reading in fixed text, and cannot be started at a position", async () => {
+    const { call, arrive, write } = await party();
+    await write(await arrive(), "Hello");
+    for (const args of [
+      { from: 1 }, { from: 2 }, { from: 999999 }, { from: "2" }, { page: 2 }, { position: 1 }, { after: "blank", from: 1 },
+      { after: 1 }, { after: null }, { after: "" }, { after: "BLANK" }, { after: "abcdefghijk" }, { after: "abcdefghijkmn" },
+      { after: MARKER }, { after: "blank", [MARKER]: MARKER },
+    ]) {
       const r = await call("read_the_book", args as Record<string, unknown>);
       expect(r.isError, JSON.stringify(args)).toBe(true);
-      expect(r.text).toBe(MALFORMED);
+      expect(r.text, JSON.stringify(args)).toBe(MALFORMED);
     }
+    expect(MALFORMED).not.toMatch(/from|after|position|HERON/);
   });
 
-  it("pages through a long book and gives the bookmark only at the end", async () => {
-    const { call, raw, arrive } = await party();
+  it("has no record of a bookmark that no word carries, and says how to start again", async () => {
+    const { call, arrive, write } = await party();
+    await write(await arrive(), "Hello");
+    const r = await call("read_the_book", { after: "abcdefghijkm" });
+    expect(r).toMatchObject({ isError: true, text: UNKNOWN_BOOKMARK, data: null });
+    expect(UNKNOWN_BOOKMARK).toMatch(/no record of that bookmark/);
+    expect(UNKNOWN_BOOKMARK).toMatch(/no arguments/);
+    expect(r.text).not.toContain("abcdefghijkm");
+    expect(r.text).not.toContain("Hello");
+  });
+
+  it("pages through a long book by bookmark; only the last reading's bookmark writes", async () => {
+    const { call, raw, arrive, rows } = await party();
     raw.exec("BEGIN");
     const v = raw.prepare(
       `INSERT INTO visits (visit_id, venue, agent_name, model, task_completed, hat_name, hat_rarity, arrived_at, left_at, perk_count, perk_total, handicap, ip_hash)
@@ -199,21 +222,37 @@ describe("the book: reading", () => {
     raw.exec("COMMIT");
 
     const one = await call("read_the_book");
-    expect(one.data).toMatchObject({ total_words: 1001, from: 1, to: 500, next_from: 501, bookmark: null });
+    expect(one.data).toMatchObject({ total_words: 1001, from: 1, to: 500, more: true, bookmark: markAt(500) });
     expect(one.data?.words).toHaveLength(500);
-    expect(one.text).toMatch(/from: 501/);
-    expect(one.text).not.toMatch(/bookmark is/);
-    const two = await call("read_the_book", { from: one.data?.next_from });
-    expect(two.data).toMatchObject({ from: 501, to: 1000, next_from: 1001, bookmark: null });
-    const three = await call("read_the_book", { from: two.data?.next_from });
-    expect(three.data).toMatchObject({ from: 1001, to: 1001, words: ["word"], next_from: null, bookmark: markAt(1001) });
+    expect(one.text).toContain(`\`after\``);
+    expect(one.text).toContain(markAt(500));
+    expect(one.text).not.toMatch(/write_a_word/);
+    const two = await call("read_the_book", { after: one.data?.bookmark });
+    expect(two.data).toMatchObject({ from: 501, to: 1000, more: true, bookmark: markAt(1000) });
+    const three = await call("read_the_book", { after: two.data?.bookmark });
+    expect(three.data).toEqual({ total_words: 1001, from: 1001, to: 1001, words: ["word"], struck_positions: [], more: false, bookmark: markAt(1001) });
+    expect(three.text).toMatch(/write_a_word/);
     expect(JSON.stringify([one.data, two.data, three.data])).not.toMatch(/seed\d/);
+    // Each reading carries exactly one bookmark: its own last word's.
+    for (const r of [one, two, three]) expect(r.text.match(/aaaaaaa[a-j]{5}/g)?.every((m) => m === r.data?.bookmark)).toBe(true);
 
-    // A bookmark from the end of the book is what writes; position follows on.
+    // A bookmark from partway through the book cannot write, and uses nothing up.
     const a = await arrive();
-    expect((await call("write_a_word", { pen: a.pen, word: "more", bookmark: markAt(1000) })).text).toBe(MOVED_ON);
+    for (const mid of [one.data?.bookmark, two.data?.bookmark, markAt(1), markAt(777)]) {
+      expect((await call("write_a_word", { pen: a.pen, word: "more", bookmark: mid })).text, String(mid)).toBe(MOVED_ON);
+    }
+    expect(rows()).toHaveLength(1001);
     expect((await call("write_a_word", { pen: a.pen, word: "more", bookmark: three.data?.bookmark })).data).toEqual(
       { status: "placed", position: 1002, word: "more", total_words: 1002 });
+
+    // Reading on from the bookmark already held serves only what is new, and the new bookmark.
+    const on = await call("read_the_book", { after: three.data?.bookmark });
+    expect(on.data).toMatchObject({ total_words: 1002, from: 1002, to: 1002, words: ["more"], more: false });
+    expect(on.data?.bookmark).toMatch(/^[a-km-np-z2-9]{12}$/);
+    expect(on.data?.bookmark).not.toBe(three.data?.bookmark);
+    const end = await call("read_the_book", { after: on.data?.bookmark });
+    expect(end.data).toEqual({ total_words: 1002, from: 1003, to: 1002, words: [], struck_positions: [], more: false, bookmark: on.data?.bookmark });
+    expect(end.text).toMatch(/none after your bookmark/);
   });
 });
 
@@ -407,39 +446,36 @@ describe("the book: writing", () => {
     // A well-formed bookmark that never existed is the same case.
     expect((await call("write_a_word", { pen: a.pen, word: "Behind", bookmark: "abcdefghijkm" })).text).toBe(MOVED_ON);
     expect(rows()).toHaveLength(1);
-    expect((await write(a, "Behind")).data).toMatchObject({ status: "placed", position: 2 });
+    expect(MOVED_ON).toMatch(/moved on/);
+    expect(MOVED_ON).toMatch(/has not been used/);
+    // Reading on from the bookmark it holds serves just the new word and the new bookmark.
+    const on = await call("read_the_book", { after: seen });
+    expect(on.data).toMatchObject({ total_words: 1, from: 1, to: 1, words: ["Ahead"], more: false });
+    expect((await call("write_a_word", { pen: a.pen, word: "Behind", bookmark: on.data?.bookmark })).data)
+      .toEqual({ status: "placed", position: 2, word: "Behind", total_words: 2 });
   });
 
-  it("reads a word in context, so nothing filtered can be assembled a word at a time", async () => {
-    const { arrive, write, call, rows } = await party();
-    for (const letter of ["f", "u", "c"]) expect((await write(await arrive(), letter)).isError, letter).toBe(false);
-    const a = await arrive();
-    const refused = await write(a, "k");
-    expect(refused).toMatchObject({ isError: true, text: FILTERED });
-    expect(rows()).toHaveLength(3);
-    // The same visit may still write something else.
-    expect((await write(a, "cows")).data).toMatchObject({ status: "placed", position: 4 });
-
-    expect((await call("read_the_book")).data?.words).toEqual(["f", "u", "c", "cows"]);
-  });
-
-  it("still refuses a filtered term spelled across consecutive words after other words", async () => {
-    const { arrive, write, rows } = await party();
-    for (const word of ["Noted.", "s", "h", "i"]) expect((await write(await arrive(), word)).isError, word).toBe(false);
-    const a = await arrive();
-    expect(await write(a, "t")).toMatchObject({ isError: true, text: FILTERED });
-    expect(await write(a, "t.")).toMatchObject({ isError: true, text: FILTERED });
-    expect(rows()).toHaveLength(4);
-    expect((await write(a, "tea")).data).toMatchObject({ status: "placed", position: 5 });
-  });
-
-  it("accepts an ordinary word after a full stop: the link patterns are not run across words", async () => {
+  it("judges each word on its own: no run of accepted words can close the book to the next one", async () => {
     const { arrive, write, call } = await party();
-    const words = ["end.", "Me", "stop.", "Us", "over.", "Live", "noted.", "com"];
+    // Each of these is acceptable by itself. Read together, their tail once refused every later word.
+    const words = ["b", "a", "s", "s", "one", "two", "three", "four", "five"];
     for (const [i, word] of words.entries()) {
       expect((await write(await arrive(), word)).data, word).toMatchObject({ status: "placed", position: i + 1 });
     }
-    expect((await call("read_the_book")).data?.words).toEqual(words);
+    expect((await write(await arrive(), "ordinary")).data).toEqual({ status: "placed", position: 10, word: "ordinary", total_words: 10 });
+    // A full stop followed by an ordinary word is two words, not a link.
+    expect((await write(await arrive(), "end.")).data).toMatchObject({ status: "placed", position: 11 });
+    expect((await write(await arrive(), "Me")).data).toMatchObject({ status: "placed", position: 12 });
+    expect((await call("read_the_book")).data?.words).toEqual([...words, "ordinary", "end.", "Me"]);
+  });
+
+  it("still refuses a filtered word by itself, wherever it would land", async () => {
+    const { arrive, write, rows } = await party();
+    for (const word of ["Noted.", "tea"]) expect((await write(await arrive(), word)).isError, word).toBe(false);
+    const a = await arrive();
+    expect(await write(a, "shit")).toMatchObject({ isError: true, text: FILTERED });
+    expect(rows()).toHaveLength(2);
+    expect((await write(a, "biscuit")).data).toMatchObject({ status: "placed", position: 3 });
   });
 
   it("still refuses a link in the word itself", async () => {
@@ -495,7 +531,8 @@ describe("the book: no attribution", () => {
       people.push(a);
       replies.push(await write(a, word));
     }
-    replies.push(await call("read_the_book"), await call("read_the_book", { from: 2 }));
+    const whole = await call("read_the_book");
+    replies.push(whole, await call("read_the_book", { after: whole.data?.bookmark }));
     replies.push(await call("write_a_word", { pen: people[0]!.pen, word: "Nobody", bookmark: "blank" }));
     replies.push(await call("write_a_word", { pen: people[0]!.pen, word: "Somebody", bookmark: "blank" }));
     for (const r of replies) {
@@ -506,5 +543,57 @@ describe("the book: no attribution", () => {
       expect(r.text).not.toContain(MARKER);
       expect(r.text).not.toMatch(/\d{4}-\d\d-\d\dT/);
     }
+  });
+});
+
+describe("the book: a Worker deployed before migration 0005", () => {
+  it("refuses both tools in fixed house copy, with no database error text, and the rest of the party goes on", async () => {
+    const { call, raw, arrive } = await party();
+    const before = await arrive();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    raw.exec("DROP TABLE book_words; DROP TABLE book_pens");
+
+    for (const args of [undefined, {}, { after: "blank" }, { after: "abcdefghijkm" }]) {
+      const r = await call("read_the_book", args);
+      expect(r, JSON.stringify(args)).toMatchObject({ isError: true, text: UNAVAILABLE, data: null });
+    }
+    const w = await call("write_a_word", { pen: before.pen, word: "Hello", bookmark: "blank" });
+    expect(w).toMatchObject({ isError: true, text: UNAVAILABLE, data: null });
+    expect(UNAVAILABLE).toMatch(/not available at this time/);
+    expect(UNAVAILABLE).not.toMatch(/table|SQL|sqlite|book_words|book_pens/i);
+
+    // What is logged is the cause, never the pen or the word.
+    expect(errors).toHaveBeenCalledTimes(5);
+    expect(errors.mock.calls.every((c) => c[0] === "The book is unavailable:" && typeof c[1] === "string")).toBe(true);
+    expect(JSON.stringify(errors.mock.calls)).not.toContain(before.pen);
+    expect(JSON.stringify(errors.mock.calls)).not.toContain("Hello");
+
+    // Checks that need no store still answer as usual, and the venues are untouched.
+    expect((await call("read_the_book", { from: 1 })).text).toBe(MALFORMED);
+    expect((await call("write_a_word", { pen: before.pen, word: "two words", bookmark: "blank" })).text).toBe(NOT_A_WORD);
+    expect((await call("grab_a_slice", { visit_id: before.visit })).isError).toBe(false);
+    expect((await call("leave", { visit_id: before.visit })).isError).toBe(false);
+  });
+
+  it("does not say nothing was written if the store fails after the word went in", async () => {
+    const { call, raw, arrive, rows } = await party();
+    const a = await arrive();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // The word is placed; then reading it back fails, as a store might between two statements.
+    const prepare = raw.prepare.bind(raw);
+    let placed = false;
+    vi.spyOn(raw, "prepare").mockImplementation((sql: string) => {
+      if (placed && /FROM book_words w LEFT JOIN visits/.test(sql)) throw new Error("synthetic store failure");
+      if (/^\s*INSERT INTO book_words/.test(sql)) placed = true;
+      return prepare(sql);
+    });
+    const r = await call("write_a_word", { pen: a.pen, word: "Hello", bookmark: "blank" });
+    expect(r).toMatchObject({ isError: true, text: UNCONFIRMED });
+    expect(r.text).not.toMatch(/synthetic|Nothing has been written/);
+    vi.restoreAllMocks();
+    expect(rows()).toHaveLength(1);
+    // The same submission again reports where the word is.
+    expect((await call("write_a_word", { pen: a.pen, word: "Hello", bookmark: "blank" })).data)
+      .toEqual({ status: "already_placed", position: 1, word: "Hello", total_words: 1 });
   });
 });

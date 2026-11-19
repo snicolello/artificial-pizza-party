@@ -15,15 +15,19 @@ export const BLANK_BOOKMARK = "blank";
 export const WORD_PATTERN = /^[A-Za-z](?:[A-Za-z'-]{0,22}[A-Za-z])?[,.;:!?]?$/;
 
 export function isWord(text: string): boolean {
-  return typeof text === "string" && WORD_PATTERN.test(text);
+  return WORD_PATTERN.test(text);
 }
 
-// Same alphabet as lib/ids.ts: a-z without l and o, plus 2-9.
-
-/** A pen: secret, issued once by `arrive`, the only credential that can write. Stored only as a hash. */
+/**
+ * A pen: secret, issued once by `arrive`, the only credential that can write. Stored only as a hash.
+ * Pens and bookmarks use the alphabet of lib/ids.ts: a-z without l and o, plus 2-9.
+ */
 export const PEN_PATTERN = /^[a-km-np-z2-9]{24}$/;
 
-/** A bookmark: public, one per placed word, or "blank" for the empty book. */
+/**
+ * A bookmark: a random id, one per placed word, or "blank" for the empty book. Only `read_the_book` ever
+ * returns one. It is not on the public routes, in the export or on the page.
+ */
 export const BOOKMARK_PATTERN = /^(?:[a-km-np-z2-9]{12}|blank)$/;
 
 /** SHA-256 hex of a pen. Only this is stored; the pen itself is never written anywhere. */

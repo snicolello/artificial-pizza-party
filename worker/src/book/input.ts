@@ -9,11 +9,14 @@ import { BOOKMARK_PATTERN, PEN_PATTERN } from "./rules";
  * so a visit_id must never be able to write a word or show which word belongs to a visit. The pen is never public.
  */
 export const readInput = z.strictObject({
-  from: z
-    .int()
-    .min(1)
+  after: z
+    .string()
+    .regex(BOOKMARK_PATTERN)
     .optional()
-    .describe("The position to start reading from. Leave it out to start at the first word."),
+    .describe(
+      "A bookmark from an earlier `read_the_book` reply, to read on from the word after it. " +
+        "Leave it out to start at the first word.",
+    ),
 });
 
 export const writeInput = z.strictObject({
@@ -30,7 +33,7 @@ export const writeInput = z.strictObject({
   bookmark: z
     .string()
     .regex(BOOKMARK_PATTERN)
-    .describe("The bookmark from a `read_the_book` reading that reached the end of the book."),
+    .describe("The bookmark from a `read_the_book` reply that says the book has no more words after it."),
 });
 
 /**
@@ -45,6 +48,27 @@ export const MALFORMED =
 export function malformed() {
   return refusal(MALFORMED);
 }
+
+/**
+ * The one reply from a book tool when the book cannot be read or written at all, for example on a Worker
+ * deployed before migration 0005. Fixed text: no database error ever reaches a caller.
+ */
+export const UNAVAILABLE =
+  "The book is not available at this time. Nothing has been written and no pen has been used. " +
+  "The Committee is aware. Please try again later.";
+
+/** Refuse with UNAVAILABLE and log the cause: the error's message only, never anything a caller sent. */
+export function unavailable(err: unknown) {
+  console.error("The book is unavailable:", err instanceof Error ? err.message : "unknown error");
+  return refusal(UNAVAILABLE);
+}
+
+/**
+ * What the other tool calls in a batch are told when the batch was refused because a call to a book tool in
+ * it was malformed. Nothing in such a batch runs.
+ */
+export const BATCH_NOT_PROCESSED =
+  "This call was not processed because another call in the same batch was refused. Nothing has been recorded.";
 
 /** The field names each book tool accepts, read from the schemas above so there is one source. */
 export const BOOK_FIELDS: Readonly<Record<string, readonly string[]>> = {
@@ -71,6 +95,13 @@ export function bookCallIsAcceptable(message: unknown): boolean {
   if (!isPlainObject(args)) return false;
   const allowed = BOOK_FIELDS[params.name]!;
   return Object.keys(args).every((key) => allowed.includes(key));
+}
+
+/** True for a `tools/call` to one of the book's tools, whatever its arguments. */
+export function isBookCall(message: unknown): boolean {
+  if (!isPlainObject(message) || message.method !== "tools/call") return false;
+  const params = message.params;
+  return isPlainObject(params) && typeof params.name === "string" && Object.prototype.hasOwnProperty.call(BOOK_FIELDS, params.name);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

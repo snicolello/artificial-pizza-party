@@ -23,6 +23,12 @@ function json(data: unknown, status = 200): Response {
 export const NO_SUCH_PAGE = "The book has no such page. The Committee has checked.";
 
 /**
+ * The one reply when the book cannot be read at all, for example on a Worker deployed before migration 0005.
+ * Fixed text: no database error reaches the public.
+ */
+export const BOOK_UNAVAILABLE = "The book is unavailable at this time. It has not been lost. The Committee is aware.";
+
+/**
  * Routes /api/stats, /api/guestbook/{venue}, /api/ticker, /api/hats, /api/plaques, /api/agentin,
  * /api/book and /api/book/{page}. Null if not a public API path.
  */
@@ -40,11 +46,16 @@ export async function handlePublicApi(request: Request, env: Env, pathname: stri
   // The AgentIn feed: house copy and counts only. Nothing in it leads back to a visit.
   if (route === "agentin") return json(await agentinFeed(env.DB));
   // The book: the words in order and the house mark where one was struck. No bookmark, no ids, no timestamps.
-  if (route === "book") return json(await bookIndex(env.DB));
-  if (route.startsWith("book/")) {
-    const n = route.slice("book/".length);
-    const page = /^[1-9]\d{0,8}$/.test(n) ? await bookPage(env.DB, Number(n)) : null;
-    return page ? json(page) : json({ error: NO_SUCH_PAGE }, 404);
+  if (route === "book" || route.startsWith("book/")) {
+    try {
+      if (route === "book") return json(await bookIndex(env.DB));
+      const n = route.slice("book/".length);
+      const page = /^[1-9]\d{0,8}$/.test(n) ? await bookPage(env.DB, Number(n)) : null;
+      return page ? json(page) : json({ error: NO_SUCH_PAGE }, 404);
+    } catch (err) {
+      console.error("The book is unavailable:", err instanceof Error ? err.message : "unknown error");
+      return json({ error: BOOK_UNAVAILABLE }, 503);
+    }
   }
 
   const venue = route.slice("guestbook/".length);

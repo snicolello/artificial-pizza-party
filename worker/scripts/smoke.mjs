@@ -77,20 +77,21 @@ const venues = json(await call("list_venues"))?.venues ?? [];
 check(venues.length === 3, `list_venues: ${venues.map((v) => v.slug).join(", ")}`);
 
 // --- The book, read with no visit ------------------------------------------
-// Read to the end, a page at a time, so the bookmark is one from a reading that has seen every word.
+// Read to the end, a reading at a time, each one continuing after the bookmark of the one before. The bookmark
+// of the last reading is then the book's current one, from a reader that was served every word.
 const bookSeen = [];
 let reading = await call("read_the_book");
 let bookReadOk = !reading.isError && json(reading)?.from === 1;
 while (bookReadOk) {
   bookSeen.push(...json(reading).words);
-  const next = json(reading).next_from;
-  if (next === null) break;
-  reading = await call("read_the_book", { from: next });
-  bookReadOk = !reading.isError && json(reading)?.from === next;
+  if (json(reading).more !== true) break;
+  const after = json(reading).bookmark;
+  reading = await call("read_the_book", { after });
+  bookReadOk = !reading.isError && json(reading)?.from === bookSeen.length + 1;
 }
 const bookmark = json(reading)?.bookmark;
-check(bookReadOk && json(reading)?.total_words === bookSeen.length && /^([a-km-np-z2-9]{12}|blank)$/.test(bookmark ?? "") &&
-  (bookmark === "blank") === (bookSeen.length === 0),
+check(bookReadOk && json(reading)?.more === false && json(reading)?.total_words === bookSeen.length &&
+  /^([a-km-np-z2-9]{12}|blank)$/.test(bookmark ?? "") && (bookmark === "blank") === (bookSeen.length === 0),
   `[book] read_the_book with no visit reaches the end: ${bookSeen.length} words, and a bookmark`);
 
 // --- One full visit per venue ---------------------------------------------

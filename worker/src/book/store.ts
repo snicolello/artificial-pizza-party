@@ -8,18 +8,21 @@ import { BLANK_BOOKMARK, HOUSE_MARK, PAGE_SIZE } from "./rules";
 export interface BookReading {
   /** Words in the book at the time of the reading. Struck positions count. */
   total_words: number;
-  /** First position of the reading (>= 1). */
+  /** Position of the first word returned: the one after the word the reading started after. */
   from: number;
-  /** Last position returned; from - 1 when the reading is empty. */
+  /** Position of the last word returned; from - 1 when none were. */
   to: number;
   /** Positions from..to in order. A struck position holds the house mark. */
   words: string[];
   /** Positions within from..to that are struck, ascending. */
   struck_positions: number[];
-  /** Where to continue; null when this reading reached the end of the book. */
-  next_from: number | null;
-  /** The book's current bookmark, only when this reading reached the end; otherwise null. */
-  bookmark: string | null;
+  /** Whether the book holds words after `to`. */
+  more: boolean;
+  /**
+   * The bookmark of the last word returned; if none were, the bookmark the reading started after.
+   * It is the book's current bookmark exactly when `more` is false. Otherwise it is where to read on from.
+   */
+  bookmark: string;
 }
 
 export interface BookIndex {
@@ -46,50 +49,69 @@ export async function bookHead(db: D1Database): Promise<{ total_words: number; b
   return row ? { total_words: row.position, bookmark: row.bookmark } : { total_words: 0, bookmark: BLANK_BOOKMARK };
 }
 
-/** Positions from..to as displayed. A word whose visit is hidden (or missing) is the house mark. */
-async function displayed(db: D1Database, from: number, to: number): Promise<{ words: string[]; struck_positions: number[] }> {
+/**
+ * Positions from..to as displayed. A word whose visit is hidden (or missing) is the house mark.
+ * `last_bookmark` is the bookmark of the last row, for a reading; the public pages never carry it.
+ */
+async function displayed(
+  db: D1Database,
+  from: number,
+  to: number,
+): Promise<{ words: string[]; struck_positions: number[]; last_bookmark: string | null }> {
   const words: string[] = [];
   const struck_positions: number[] = [];
-  if (to < from) return { words, struck_positions };
+  if (to < from) return { words, struck_positions, last_bookmark: null };
   const { results } = await db
     .prepare(
-      `SELECT w.position, w.word, COALESCE(v.hidden, 1) AS hidden
+      `SELECT w.position, w.word, w.bookmark, COALESCE(v.hidden, 1) AS hidden
          FROM book_words w LEFT JOIN visits v ON v.visit_id = w.visit_id
         WHERE w.position >= ? AND w.position <= ?
         ORDER BY w.position`,
     )
     .bind(from, to)
-    .all<{ position: number; word: string; hidden: number }>();
+    .all<{ position: number; word: string; bookmark: string; hidden: number }>();
   for (const row of results) {
     const struck = row.hidden !== 0;
     words.push(struck ? HOUSE_MARK : row.word);
     if (struck) struck_positions.push(row.position);
   }
-  return { words, struck_positions };
+  return { words, struck_positions, last_bookmark: results[results.length - 1]?.bookmark ?? null };
 }
 
 /**
- * Read the book from `from` (default 1), at most `limit` words (default and cap PAGE_SIZE).
- * The head is read first and the page is bounded by it, so total_words, bookmark and words agree with each
- * other even if a word lands in between. A `from` beyond the end is read as the position after the last word:
- * an empty reading that has reached the end and carries the bookmark.
+ * Read on from a bookmark: at most `limit` words (default and cap PAGE_SIZE), starting at the position after
+ * the word that carries bookmark `after`. "blank" starts at the first word. Null if no word carries `after`.
+ *
+ * A reading cannot be started at a position. So the only way to be given the book's current bookmark is to
+ * be served every word from the first, or to read on from a bookmark obtained that way earlier.
+ *
+ * The bookmark is looked up first, then the head, and the page is bounded by that head, so total_words, more,
+ * bookmark and words agree with each other even if a word lands in between.
  */
-export async function readBook(db: D1Database, from: number = 1, limit: number = PAGE_SIZE): Promise<BookReading> {
+export async function readBookAfter(
+  db: D1Database,
+  after: string = BLANK_BOOKMARK,
+  limit: number = PAGE_SIZE,
+): Promise<BookReading | null> {
+  let start = 1;
+  if (after !== BLANK_BOOKMARK) {
+    const row = await db.prepare(`SELECT position FROM book_words WHERE bookmark = ?`).bind(after).first<{ position: number }>();
+    if (!row) return null;
+    start = row.position + 1;
+  }
   const head = await bookHead(db);
   const total = head.total_words;
   const size = Math.min(Math.max(Number.isFinite(limit) ? Math.floor(limit) : PAGE_SIZE, 1), PAGE_SIZE);
-  const start = Math.min(Math.max(Number.isFinite(from) ? Math.floor(from) : 1, 1), total + 1);
   const to = Math.min(start + size - 1, total);
   const page = await displayed(db, start, to);
-  const atEnd = to >= total;
   return {
     total_words: total,
     from: start,
     to,
     words: page.words,
     struck_positions: page.struck_positions,
-    next_from: atEnd ? null : to + 1,
-    bookmark: atEnd ? head.bookmark : null,
+    more: to < total,
+    bookmark: page.last_bookmark ?? after,
   };
 }
 
@@ -107,6 +129,42 @@ export async function bookPage(db: D1Database, page: number): Promise<BookPage |
   const to = Math.min(page * PAGE_SIZE, total_words);
   const { words, struck_positions } = await displayed(db, from, to);
   return { page, from, to, total_words, words, struck_positions };
+}
+
+/** How many words one query reads for the export. */
+export const EXPORT_CHUNK = 5000;
+
+/**
+ * The whole book as the public routes serve it: the index and every page, for the export. The head is read
+ * once and the words in position-ordered chunks bounded by it, so the cost is one query plus one per
+ * `chunk` words (not two per page), and the files agree with each other even if a word lands meanwhile.
+ * Each page equals what bookPage returns for the same head.
+ */
+export async function bookForExport(db: D1Database, chunk: number = EXPORT_CHUNK): Promise<{ index: BookIndex; pages: BookPage[] }> {
+  const { total_words } = await bookHead(db);
+  const size = Math.max(Number.isFinite(chunk) ? Math.floor(chunk) : EXPORT_CHUNK, 1);
+  const words: string[] = [];
+  const struck: number[] = [];
+  for (let from = 1; from <= total_words; from += size) {
+    const part = await displayed(db, from, Math.min(from + size - 1, total_words));
+    words.push(...part.words);
+    struck.push(...part.struck_positions);
+  }
+  const index: BookIndex = { total_words, page_size: PAGE_SIZE, pages: Math.ceil(total_words / PAGE_SIZE), house_mark: HOUSE_MARK };
+  const pages: BookPage[] = [];
+  for (let page = 1; page <= index.pages; page++) {
+    const from = (page - 1) * PAGE_SIZE + 1;
+    const to = Math.min(page * PAGE_SIZE, total_words);
+    pages.push({
+      page,
+      from,
+      to,
+      total_words,
+      words: words.slice(from - 1, to),
+      struck_positions: struck.filter((p) => p >= from && p <= to),
+    });
+  }
+  return { index, pages };
 }
 
 /**

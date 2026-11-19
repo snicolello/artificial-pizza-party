@@ -2,7 +2,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { HOUSE_MARK, PAGE_SIZE } from "../src/book/rules";
-import { bookHead, bookIndex, bookPage, issuePen, placeWord, readBook, visitIdForPen, wordByVisit } from "../src/book/store";
+import { bookForExport, bookHead, bookIndex, bookPage, issuePen, placeWord, readBookAfter, visitIdForPen, wordByVisit } from "../src/book/store";
 import { memoryD1 } from "./helpers/memory-d1";
 
 const NOW = new Date("2026-11-18T12:00:00.000Z");
@@ -33,8 +33,11 @@ const count = (raw: DatabaseSync) => (raw.prepare("SELECT COUNT(*) AS n FROM boo
 describe("the empty book", () => {
   it("reads as blank, with no pages", async () => {
     const { db } = memoryD1();
-    expect(await readBook(db)).toEqual({ total_words: 0, from: 1, to: 0, words: [], struck_positions: [], next_from: null, bookmark: "blank" });
-    expect(await readBook(db, 40)).toMatchObject({ from: 1, to: 0, bookmark: "blank" });
+    const blank = { total_words: 0, from: 1, to: 0, words: [], struck_positions: [], more: false, bookmark: "blank" };
+    expect(await readBookAfter(db)).toEqual(blank);
+    expect(await readBookAfter(db, "blank")).toEqual(blank);
+    expect(await readBookAfter(db, "mark40")).toBeNull();
+    expect(await bookForExport(db)).toEqual({ index: await bookIndex(db), pages: [] });
     expect(await bookIndex(db)).toEqual({ total_words: 0, page_size: 500, pages: 0, house_mark: "[struck]" });
     expect(await bookPage(db, 1)).toBeNull();
     expect(await bookHead(db)).toEqual({ total_words: 0, bookmark: "blank" });
@@ -75,7 +78,7 @@ describe("placeWord", () => {
     expect(await wordByVisit(db, "open2")).toBeNull();
     expect(await placeWord(db, { visit_id: "open2", word: "world.", expected_bookmark: "m1", new_bookmark: "m2" }, NOW)).toBe(true);
     expect(await wordByVisit(db, "open2")).toEqual({ position: 2, word: "world.", struck: false });
-    expect(await readBook(db)).toEqual({ total_words: 2, from: 1, to: 2, words: ["Hello,", "world."], struck_positions: [], next_from: null, bookmark: "m2" });
+    expect(await readBookAfter(db)).toEqual({ total_words: 2, from: 1, to: 2, words: ["Hello,", "world."], struck_positions: [], more: false, bookmark: "m2" });
     expect(count(raw)).toBe(2);
   });
 });
@@ -102,46 +105,68 @@ describe("a strike", () => {
     const { db, raw } = memoryD1();
     fill(raw, 5);
     raw.prepare("UPDATE visits SET hidden = 1 WHERE visit_id = 'v3'").run();
-    const reading = await readBook(db);
+    const reading = (await readBookAfter(db))!;
     expect(reading.words).toEqual([wordAt(1), wordAt(2), HOUSE_MARK, wordAt(4), wordAt(5)]);
     expect(reading.struck_positions).toEqual([3]);
     expect(reading.total_words).toBe(5);
     expect(reading.bookmark).toBe("mark5"); // a strike changes no bookmark
     expect(await bookPage(db, 1)).toEqual({ page: 1, from: 1, to: 5, total_words: 5, words: reading.words, struck_positions: [3] });
     expect(await wordByVisit(db, "v3")).toEqual({ position: 3, word: wordAt(3), struck: true });
-    expect(JSON.stringify([reading, await bookPage(db, 1), await readBook(db, 3, 1)])).not.toContain(wordAt(3));
+    expect(JSON.stringify([reading, await bookPage(db, 1), await readBookAfter(db, "mark2", 1)])).not.toContain(wordAt(3));
     // Striking the last word leaves the bookmark where it was.
     raw.prepare("UPDATE visits SET hidden = 1 WHERE visit_id = 'v5'").run();
-    expect(await readBook(db, 4)).toMatchObject({ words: [wordAt(4), HOUSE_MARK], struck_positions: [5], bookmark: "mark5" });
+    expect(await readBookAfter(db, "mark3")).toMatchObject({ from: 4, words: [wordAt(4), HOUSE_MARK], struck_positions: [5], more: false, bookmark: "mark5" });
   });
 });
 
 describe("a long book", () => {
   const N = 1203;
-  it("can be read whole from the first word, the bookmark only at the end", async () => {
+  it("can be read whole from the first word, by bookmark, the current bookmark only at the end", async () => {
     const { db, raw } = memoryD1();
     fill(raw, N);
     const seen: string[] = [];
     const readings = [];
-    for (let from: number | null = 1; from !== null; ) {
-      const r = await readBook(db, from);
+    for (let after: string | undefined; ; ) {
+      const r = (await readBookAfter(db, after))!;
       readings.push(r);
       seen.push(...r.words);
-      from = r.next_from;
+      if (!r.more) break;
+      after = r.bookmark;
     }
-    expect(readings.map((r) => [r.from, r.to, r.next_from, r.bookmark])).toEqual([
-      [1, 500, 501, null], [501, 1000, 1001, null], [1001, N, null, `mark${N}`],
+    expect(readings.map((r) => [r.from, r.to, r.more, r.bookmark])).toEqual([
+      [1, 500, true, "mark500"], [501, 1000, true, "mark1000"], [1001, N, false, `mark${N}`],
     ]);
     expect(readings.every((r) => r.total_words === N && r.words.length === r.to - r.from + 1)).toBe(true);
     expect(seen).toEqual(Array.from({ length: N }, (_, i) => wordAt(i + 1)));
 
-    // Exactly at a page edge, past the end, and with a limit.
-    expect(await readBook(db, N)).toMatchObject({ from: N, to: N, words: [wordAt(N)], next_from: null, bookmark: `mark${N}` });
-    expect(await readBook(db, N + 1)).toMatchObject({ from: N + 1, to: N, words: [], next_from: null, bookmark: `mark${N}` });
-    expect(await readBook(db, 99999)).toMatchObject({ from: N + 1, to: N, words: [], next_from: null, bookmark: `mark${N}` });
-    expect(await readBook(db, 10, 3)).toMatchObject({ from: 10, to: 12, words: [wordAt(10), wordAt(11), wordAt(12)], next_from: 13, bookmark: null });
-    expect((await readBook(db, 1, 5000)).words).toHaveLength(PAGE_SIZE);
-    expect(await readBook(db, N - 7, 8)).toMatchObject({ from: N - 7, to: N, bookmark: `mark${N}` });
+    // From the last word but one, from the last word, with a limit, and from a bookmark no word carries.
+    expect(await readBookAfter(db, `mark${N - 1}`)).toMatchObject({ from: N, to: N, words: [wordAt(N)], more: false, bookmark: `mark${N}` });
+    expect(await readBookAfter(db, `mark${N}`)).toEqual({ total_words: N, from: N + 1, to: N, words: [], struck_positions: [], more: false, bookmark: `mark${N}` });
+    expect(await readBookAfter(db, "mark9", 3)).toMatchObject({ from: 10, to: 12, words: [wordAt(10), wordAt(11), wordAt(12)], more: true, bookmark: "mark12" });
+    expect((await readBookAfter(db, "blank", 5000))!.words).toHaveLength(PAGE_SIZE);
+    expect(await readBookAfter(db, `mark${N - 8}`, 8)).toMatchObject({ from: N - 7, to: N, more: false, bookmark: `mark${N}` });
+    for (const unknown of ["mark0", `mark${N + 1}`, "99999", "", "v1"]) expect(await readBookAfter(db, unknown), unknown).toBeNull();
+  });
+
+  it("is read for the export in a few large queries, equal to the pages the routes serve", async () => {
+    const { db, raw } = memoryD1();
+    fill(raw, N);
+    for (const i of [7, 500, 501, N]) raw.prepare("UPDATE visits SET hidden = 1 WHERE visit_id = ?").run(`v${i}`);
+    let queries = 0;
+    const counted = { ...db, prepare: (sql: string) => (queries++, db.prepare(sql)) } as unknown as D1Database;
+
+    const whole = await bookForExport(counted);
+    expect(queries).toBe(2); // the head, and one chunk of up to 5,000 words
+    const pages = [await bookPage(db, 1), await bookPage(db, 2), await bookPage(db, 3)];
+    expect(whole).toEqual({ index: await bookIndex(db), pages });
+    expect(whole.pages.map((p) => p.struck_positions)).toEqual([[7, 500], [501], [N]]);
+
+    // The chunk size does not change the result, wherever the chunk edges fall.
+    for (const chunk of [1203, 1000, 500, 499, 7]) {
+      queries = 0;
+      expect(await bookForExport(counted, chunk), String(chunk)).toEqual(whole);
+      expect(queries, String(chunk)).toBe(1 + Math.ceil(N / chunk));
+    }
   });
 
   it("is served in pages of 500 with no bookmark", async () => {
@@ -162,6 +187,7 @@ describe("a long book", () => {
     fill(raw, 500);
     expect((await bookIndex(db)).pages).toBe(1);
     expect(await bookPage(db, 2)).toBeNull();
-    expect(await readBook(db)).toMatchObject({ to: 500, next_from: null, bookmark: "mark500" });
+    expect(await readBookAfter(db)).toMatchObject({ to: 500, more: false, bookmark: "mark500" });
+    expect(await bookForExport(db)).toEqual({ index: await bookIndex(db), pages: [await bookPage(db, 1)] });
   });
 });

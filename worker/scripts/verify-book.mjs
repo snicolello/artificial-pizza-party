@@ -1,10 +1,12 @@
 // Reproducible LOCAL verification of the book: the seven acceptance scenarios, over real MCP, against a
 // throwaway database. Synthetic attendees only.
 //
-// Usage: node scripts/verify-book.mjs [--keep] [--transcript <file>] [--verbose]
+// Usage: node scripts/verify-book.mjs [--keep] [--transcript <file>] [--verbose] [--allow-skip]
 //   --keep               leave the local server and the page running afterwards and print their URLs (Ctrl-C to stop)
 //   --transcript <file>  also write a readable sample interaction (every pen redacted), from its own fresh store
 //   --verbose            print every tool reply (pens and the filtered test word are masked)
+//   --allow-skip         exit 0 even if some checks were skipped (without it, a run with a skipped check is
+//                        reported as incomplete and exits 1)
 //
 // What it does, by itself: makes a temp directory, applies the migrations to a local D1 store in it, starts
 // `wrangler dev` on a free port (never 8787) against that store, runs the checks, stops the server and
@@ -12,14 +14,15 @@
 // It never talks to anything but localhost and never passes --remote.
 //
 // The local rate limit (60 tool calls a minute) stays on. The script counts its calls and waits when it must.
-// The page checks need Playwright. It is not a dependency: if this machine has none, they are reported as SKIP.
+// The page checks need Playwright. It is not a dependency: if this machine has none, they are reported as SKIP,
+// and a run with any SKIP is incomplete: it says so and exits 1 unless --allow-skip was passed.
 // Scenario 7 ends with the smoke test, which runs last so that its calls get a window of their own.
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash, randomInt } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { createRequire } from "node:module";
-import { createServer as createNetServer } from "node:net";
+import { connect as connectNet, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,10 +40,11 @@ const KEEP = argv.includes("--keep");
 const VERBOSE = argv.includes("--verbose");
 const transcriptAt = argv.indexOf("--transcript");
 const TRANSCRIPT = transcriptAt >= 0 ? argv[transcriptAt + 1] : null;
-const known = new Set(["--keep", "--verbose", "--transcript"]);
+const ALLOW_SKIP = argv.includes("--allow-skip");
+const known = new Set(["--keep", "--verbose", "--transcript", "--allow-skip"]);
 const stray = argv.filter((a, i) => !known.has(a) && (transcriptAt < 0 || i !== transcriptAt + 1));
 if (stray.length || (transcriptAt >= 0 && (!TRANSCRIPT || TRANSCRIPT.startsWith("--")))) {
-  console.error("Usage: node scripts/verify-book.mjs [--keep] [--transcript <file>] [--verbose]");
+  console.error("Usage: node scripts/verify-book.mjs [--keep] [--transcript <file>] [--verbose] [--allow-skip]");
   console.error("This script starts its own local server. It does not take a URL and only runs against localhost.");
   process.exit(2);
 }
@@ -207,24 +211,39 @@ async function startServer(store, port) {
   return server;
 }
 
+/** True if nothing accepts a connection on the port: the connection is refused, not merely slow. */
+function portRefuses(port) {
+  return new Promise((res) => {
+    const socket = connectNet({ host: "127.0.0.1", port });
+    socket.setTimeout(1000, () => { socket.destroy(); res(false); });
+    socket.once("connect", () => { socket.destroy(); res(false); });
+    socket.once("error", (e) => res(e.code === "ECONNREFUSED"));
+  });
+}
+function pidIsGone(pid) {
+  try { process.kill(pid, 0); return false; } catch (e) { return e.code === "ESRCH"; }
+}
+
+/** Stop the server. Returns what was observed: the old process's pid, that it has exited, and that its port refuses connections. */
 async function stopServer() {
-  if (!server) return;
-  const { child, base, exited } = server;
+  if (!server) return null;
+  const { child, port, exited } = server;
   server = null;
   if (!exited()) {
     try { process.kill(-child.pid, "SIGTERM"); } catch { /* already gone */ }
     for (let i = 0; i < 50 && !exited(); i++) await sleep(100);
     if (!exited()) {
       try { process.kill(-child.pid, "SIGKILL"); } catch { /* already gone */ }
+      for (let i = 0; i < 50 && !exited(); i++) await sleep(100);
     }
   }
   ownedPids.delete(child.pid);
-  // Wait until the port stops answering, so a restart cannot talk to the old process.
+  // Wait until the port refuses connections, so a restart cannot talk to the old process.
   for (let i = 0; i < 50; i++) {
-    try { await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(500) }); } catch { return; }
+    if (await portRefuses(port)) return { pid: child.pid, exited: exited() && pidIsGone(child.pid), refused: true };
     await sleep(100);
   }
-  throw new Error("The old server is still answering after it was stopped.");
+  throw new Error("The old server is still accepting connections after it was stopped.");
 }
 
 // --- Rate limit pacing ---------------------------------------------------------
@@ -322,24 +341,36 @@ async function arriveAs(c, venue, role) {
   return { visit: data.visit_id, pen: data.pen, result: r, data };
 }
 
-/** Read the book from the first word to the end, a page at a time. */
-async function readAll(c) {
+/**
+ * Read the book to the end, a reading at a time, each one continuing after the bookmark of the one before.
+ * Starts at the first word, or after the bookmark given. The last reading's bookmark is the book's current one.
+ */
+async function readAll(c, startAfter) {
   const words = [];
   const struck = [];
   const texts = [];
-  let from;
+  const bookmarks = [];
+  let after = startAfter;
+  let lastTo = null;
   let data;
   for (;;) {
-    const r = await c.call("read_the_book", from ? { from } : {});
+    const r = await c.call("read_the_book", after ? { after } : {});
     data = json(r);
     texts.push(text(r));
-    if (r.isError || !data || !Array.isArray(data.words)) throw new Error(`read_the_book failed: ${masked(text(r))}`);
+    if (r.isError || !data || !Array.isArray(data.words) || typeof data.bookmark !== "string" || typeof data.more !== "boolean") {
+      throw new Error(`read_the_book failed: ${masked(text(r))}`);
+    }
+    if (data.to - data.from + 1 !== data.words.length || (lastTo !== null && data.from !== lastTo + 1)) {
+      throw new Error("read_the_book returned a range that does not match its words or does not follow the reading before.");
+    }
+    lastTo = data.to;
     words.push(...data.words);
     struck.push(...data.struck_positions);
-    if (data.next_from === null) break;
-    from = data.next_from;
+    bookmarks.push(data.bookmark);
+    if (!data.more) break;
+    after = data.bookmark;
   }
-  return { words, struck, total: data.total_words, bookmark: data.bookmark, text: texts.join("\n"), readings: texts.length };
+  return { words, struck, total: data.total_words, bookmark: data.bookmark, bookmarks, text: texts.join("\n"), readings: texts.length };
 }
 const write = (c, pen, word, bookmark) => c.call("write_a_word", { pen, word, bookmark });
 const isPlaced = (r, position, word) => !r.isError && json(r)?.status === "placed" && json(r)?.position === position && json(r)?.word === word;
@@ -515,7 +546,7 @@ async function writeTranscript(file) {
   const second = json(await b.call("arrive", { venue: "pizza_party", agent_name: "cron-job-3", task_completed: "Ran at 4:00 AM as scheduled" }));
   titled("A second attendee arrives at the Pizza Party");
   const stale = json(await b.call("read_the_book", {}))?.bookmark;
-  titled("It reads the book to the end and is given the bookmark");
+  titled("It reads the book. The reply says there is no more after it, so its bookmark is the one that writes");
 
   const c = await connect(opts);
   const third = json(await c.call("arrive", { venue: "retirement_community", agent_name: "lint-pass", task_completed: "Removed 14 trailing spaces" }));
@@ -528,8 +559,8 @@ async function writeTranscript(file) {
   titled("The second attendee submits with the bookmark it read earlier. The book has moved on; its word is not used", true);
   await b.call("write_a_word", { pen: second?.pen, word: "the napkins", bookmark: stale });
   titled("It tries two words instead. That is not a word, and a refusal is free", true);
-  const fresh = json(await b.call("read_the_book", {}))?.bookmark;
-  titled("It reads again");
+  const fresh = json(await b.call("read_the_book", { after: stale }))?.bookmark;
+  titled("It reads on from the bookmark it holds, and is shown only what is new");
   await b.call("write_a_word", { pen: second?.pen, word: "napkins.", bookmark: fresh });
   titled("It resubmits with the new bookmark. Its word lands at the next position");
 
@@ -565,13 +596,15 @@ async function writeTranscript(file) {
   const intro =
     "# A sample interaction with the book\n\n" +
     "A real exchange with a local server, for review: three attendees each add a word to the book. One of them is " +
-    "told the book has moved on and tries again, one retries after leaving, and one has its word struck. " +
+    "told the book has moved on, reads on from its bookmark and tries again, one retries after leaving, and one " +
+    "has its word struck. " +
     "All three attendees are synthetic.\n\n" +
     "This file is generated. From `worker/`: `npm run verify:book -- --transcript ../docs/book-sample.md`. " +
     "It runs against a throwaway local database, so the ids and bookmarks below exist nowhere else. Every pen is " +
     `replaced with \`${PEN_SHOWN}\`; a real one is 24 characters and is shown once, by \`arrive\`. Hats and wording ` +
     "are drawn at random, so a new run reads differently.\n\n" +
-    "Things to look for: reading needs no visit; writing takes the pen, never a visit_id; a refusal uses nothing up " +
+    "Things to look for: reading needs no visit and continues from a bookmark, never from a position; writing takes " +
+    "the pen, never a visit_id; a refusal uses nothing up " +
     "and repeats nothing the caller sent; a repeated submission reports the same position; a struck word keeps its " +
     "position; and no reading, and neither public route, says who wrote a word or when.\n\n" +
     "## What a fresh session is told\n\n" +
@@ -659,9 +692,11 @@ async function main() {
   const afterDrop = rowsFor(dropper.visit);
   check(afterDrop.length === 1, "the write was sent and its response discarded unread; the store shows it succeeded");
 
-  await stopServer();
-  await startServer(store, port);
-  check(true, "server stopped and started again on the same store");
+  const stopped = await stopServer();
+  const restarted = await startServer(store, port); // returns only once the new process has answered /api/health
+  check(stopped?.exited === true && stopped.refused === true && Number.isInteger(restarted.child.pid) && restarted.child.pid !== stopped.pid &&
+    !restarted.exited() && restarted.port === port && rowsFor(dropper.visit).length === 1,
+    `the server was stopped (process ${stopped?.pid} exited; port ${port} refused connections) and a new process (${restarted.child.pid}) answered /api/health on the same store`);
 
   c = await connect(); // a fresh connection; all it has is what it sent before
   const retry = await c.call("write_a_word", dropArgs);
@@ -717,9 +752,10 @@ async function main() {
   const afterRace = bookLength();
   check(rowsFor(loser.who.visit).length === 0 && rowsFor(winner.who.visit).length === 1 && afterRace.n === base + 1 && afterRace.last === base + 1,
     "the store agrees: one new word, none from the refused visit");
-  const reread = await readAll(loser.conn);
-  check(reread.total === base + 1 && reread.words[base] === winner.word && reread.bookmark !== readLeft.bookmark,
-    "it reads again: the other word is there, and the bookmark has changed");
+  check(/`read_the_book`/.test(text(loser.result)) && /`after`/.test(text(loser.result)), "the refusal says how to read on: `read_the_book` with `after` set to the bookmark it holds");
+  const reread = await readAll(loser.conn, readLeft.bookmark);
+  check(reread.readings === 1 && reread.total === base + 1 && isDeepStrictEqual(reread.words, [winner.word]) && ID12.test(reread.bookmark) && reread.bookmark !== readLeft.bookmark,
+    "it reads on from the bookmark it holds: just the one new word comes back, with a new bookmark");
   const second = await write(loser.conn, loser.who.pen, loser.word, reread.bookmark);
   check(isPlaced(second, base + 2, loser.word), `it adds its word at the next position (${base + 2})`);
 
@@ -966,17 +1002,46 @@ async function main() {
   const longWords = [...expected6, ...Array.from({ length: PAGE_SIZE }, () => "page")];
   check(bookLength().n === longWords.length, `${PAGE_SIZE} synthetic words were added to the local store directly: the book now holds ${longWords.length}`);
   const longReader = await connect();
-  const firstReading = json(await longReader.call("read_the_book", {}));
-  check(firstReading?.to === PAGE_SIZE && firstReading?.next_from === PAGE_SIZE + 1 && firstReading?.bookmark === null && firstReading?.total_words === longWords.length,
-    "a reading returns the first 500 words, says where to continue, and gives no bookmark yet");
-  const longRead = await readAll(longReader);
-  check(longRead.readings === 2 && isDeepStrictEqual(longRead.words, longWords) && typeof longRead.bookmark === "string",
-    "reading on reaches every word from the first, in order, and then the bookmark");
+  const currentBookmark = () => sql(store, "SELECT bookmark FROM book_words ORDER BY position DESC LIMIT 1")[0][0]?.bookmark;
+  const endBookmark = currentBookmark();
+  const firstCall = await longReader.call("read_the_book", {});
+  const firstReading = json(firstCall);
+  check(firstReading?.from === 1 && firstReading?.to === PAGE_SIZE && firstReading?.more === true && firstReading?.total_words === longWords.length &&
+    ID12.test(firstReading?.bookmark ?? "") && firstReading.bookmark !== endBookmark && !text(firstCall).includes(endBookmark),
+    "a reading returns the first 500 words, says there is more, and carries a bookmark to read on from: not the book's current one");
+
+  // A reading cannot be started at a position, so the current bookmark cannot be had without the words.
+  const byPosition = [];
+  for (const args of [{ from: PAGE_SIZE + 1 }, { from: 999999 }, { after: firstReading?.bookmark, from: longWords.length + 1 }]) {
+    byPosition.push(await longReader.call("read_the_book", args));
+  }
+  check(byPosition.every((r) => r.isError === true && /accepts only the fields/.test(text(r)) && json(r) === null &&
+    containsAny(text(r), ["from", "999999", endBookmark, firstReading?.bookmark]).length === 0),
+    "a reading cannot be started at an arbitrary position: `from` is refused as an unexpected field, with no words and no bookmark");
+  const strangerMark = sha256(MARKER).replace(/[^a-km-np-z2-9]/g, "b").slice(0, 12);
+  const unknownMark = await longReader.call("read_the_book", { after: strangerMark });
+  check(unknownMark.isError === true && /no record of that bookmark/.test(text(unknownMark)) && json(unknownMark) === null &&
+    containsAny(text(unknownMark), [strangerMark, endBookmark]).length === 0,
+    "a well-formed bookmark that no word carries is refused, and the refusal repeats nothing that was sent");
+
   const cLong = await connect();
   const lastWriter = await arriveAs(cLong, "dive_bar", "regular");
+  const midWrite = await write(cLong, lastWriter.pen, "Noted.", firstReading?.bookmark);
+  check(midWrite.isError === true && /moved on/.test(text(midWrite)) && /has not been used/.test(text(midWrite)) &&
+    rowsFor(lastWriter.visit).length === 0 && bookLength().n === longWords.length,
+    "the bookmark from the first reading (more: true) cannot write: refused, nothing written");
+
+  const longRead = await readAll(longReader);
+  check(longRead.readings === 2 && isDeepStrictEqual(longRead.words, longWords) && longRead.bookmarks[0] === firstReading?.bookmark &&
+    longRead.bookmark === endBookmark,
+    "reading on by bookmark reaches every word from the first, in order; the last reading carries the book's current bookmark");
   const wroteLong = await write(cLong, lastWriter.pen, "Noted.", longRead.bookmark);
   longWords.push("Noted.");
-  check(isPlaced(wroteLong, longWords.length, "Noted."), `a visit that read to the end writes at position ${longWords.length}`);
+  check(isPlaced(wroteLong, longWords.length, "Noted."),
+    `the refusal used nothing up: the same visit, having read to the end, writes at position ${longWords.length}`);
+  const readOn = await readAll(longReader, longRead.bookmark);
+  check(readOn.readings === 1 && isDeepStrictEqual(readOn.words, ["Noted."]) && readOn.bookmark === currentBookmark() && readOn.bookmark !== longRead.bookmark,
+    "a reader holding the earlier bookmark reads on from it and is served only the new word and the new bookmark");
   await longReader.close();
   await cLong.close();
   const apiLong = await apiBook();
@@ -1034,15 +1099,21 @@ async function main() {
     console.log(`${state}  Scenario ${n}: ${title} (${t.pass} passed, ${t.fail} failed${t.skip ? `, ${t.skip} skipped` : ""})`);
   }
   console.log(`\n${passed} passed, ${failed} failed, ${skipped} skipped. ${toolCalls} tool calls by this script, plus the smoke test's.`);
-  if (skipped) console.log("Page checks were SKIPPED (no Playwright). Everything else ran.");
-  console.log(failed ? `${failed} check(s) failed.` : "All checks passed. The Committee thanks you.");
+  const incomplete = skipped > 0 && !ALLOW_SKIP;
+  if (skipped) {
+    console.log(`${skipped} check(s) were SKIPPED (the page checks need Playwright). What they cover was NOT verified by this run.`);
+  }
+  if (failed) console.log(`${failed} check(s) failed.`);
+  else if (incomplete) console.log("INCOMPLETE: no check failed, but the run did not check everything. Exiting 1. Pass --allow-skip to accept a run without the skipped checks.");
+  else if (skipped) console.log("Every check that ran passed (--allow-skip: the skipped checks are accepted as not run).");
+  else console.log("All checks passed. The Committee thanks you.");
 
   if (KEEP) {
     console.log(`\n--keep: still running. Page: ${pageUrl}#book\n        API:  ${server.base}/api/book   ${server.base}/api/book/1   MCP: ${server.base}/mcp`);
     console.log("        Ctrl-C stops the server and deletes the store.");
     await new Promise(() => {});
   }
-  return failed;
+  return failed || incomplete ? 1 : 0;
 }
 
 let exitCode = 1;
