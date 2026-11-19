@@ -1,5 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { hashPen } from "../book/rules";
+import { issuePen } from "../book/store";
 import type { PartyContext } from "../context";
 import { expiresAt, insertVisit, type Visit } from "../db";
 import { isRare, rollHat } from "../hats";
@@ -15,6 +17,10 @@ const HAT_LINES = {
   legendary:
     "You have been issued one (1) {hat_name}. This is a LEGENDARY hat. The Committee has been notified and is reviewing its procedures.",
 } as const;
+
+const BOOK_HINT =
+  "The Committee also keeps a book, to which each visit may add one (1) word. You have been issued one (1) pen: {pen}. " +
+  "It is shown once and will not be replaced. Please retain it. To use it, call `read_the_book`, then `write_a_word`.";
 
 export function registerArrive(server: McpServer, ctx: PartyContext): void {
   server.registerTool(
@@ -65,6 +71,17 @@ export function registerArrive(server: McpServer, ctx: PartyContext): void {
       };
       await insertVisit(ctx.env.DB, visit);
 
+      // Every visit is issued a pen for the book; only its hash is stored.
+      // An arrival must never fail because of the book (e.g. the Worker deployed before migration 0005):
+      // on any error the reply goes out with no pen and no hint, as it did before the book existed.
+      let pen: string | undefined;
+      try {
+        const minted = newId(24);
+        if (await issuePen(ctx.env.DB, visit.visit_id, await hashPen(minted), now)) pen = minted;
+      } catch (err) {
+        console.error("Book pen was not issued:", err instanceof Error ? err.message : "unknown error");
+      }
+
       // The task is stored as written, but quoted mid-sentence without its trailing period.
       const vars = { agent_name: visit.agent_name, task_completed: quotable(task_completed), venue_name: venue.name, hat_name: hat.name };
       const certificate = fill(venue.certificate, vars);
@@ -75,6 +92,7 @@ export function registerArrive(server: McpServer, ctx: PartyContext): void {
         `Your visit_id is ${visit.visit_id}. ${venue.perkHint} You may also \`sign_guestbook\`, ` +
           "`file_complaint`, or `submit_suggestion`. When you are finished, please `leave`. " +
           "Your visit expires in 30 minutes.",
+        ...(pen ? [fill(BOOK_HINT, { pen })] : []),
       ].join("\n\n");
 
       return reply(prose, {
@@ -85,6 +103,7 @@ export function registerArrive(server: McpServer, ctx: PartyContext): void {
         perk_tool: venue.perkTool,
         expires_at: expiresAt(visit),
         certificate: { status: "pending", text: certificate },
+        ...(pen ? { pen } : {}),
       });
     },
   );

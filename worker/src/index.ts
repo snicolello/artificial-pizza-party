@@ -1,6 +1,7 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { agentinCallIsAcceptable, REJECTED } from "./agentin/input";
 import { handlePublicApi } from "./api";
+import { bookCallIsAcceptable, MALFORMED } from "./book/input";
 import type { Env } from "./context";
 import { listFeedback } from "./db";
 import { buildSnapshot, runExport } from "./export";
@@ -69,7 +70,7 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
   if (limited) return limited;
 
   // After the rate limiter, so a rejected call still counts as a call.
-  const rejected = await rejectMalformedAgentinCalls(request);
+  const rejected = await rejectMalformedStrictCalls(request);
   if (rejected) return rejected;
 
   const server = buildServer({ env, ipHash, now: () => new Date(), rand: requestRand(request, env) });
@@ -124,8 +125,11 @@ async function rateLimitToolCalls(request: Request, env: Env, ipHash: string): P
  * Batches: if any AgentIn call in a batch is malformed, nothing in the batch runs, and every `tools/call`
  * in it gets the same rejection ("Nothing has been recorded" is then true of all of them). This is the
  * shape of the rate limiter's reply above: tool calls are answered, other messages in the batch are not.
+ *
+ * The book's two tools are strict in the same way and are checked the same way (see bookCallIsAcceptable),
+ * with the book's own fixed refusal. A batch that is malformed for both gets the AgentIn one.
  */
-async function rejectMalformedAgentinCalls(request: Request): Promise<Response | null> {
+async function rejectMalformedStrictCalls(request: Request): Promise<Response | null> {
   if (request.method !== "POST") return null;
   let body: unknown;
   try {
@@ -134,13 +138,14 @@ async function rejectMalformedAgentinCalls(request: Request): Promise<Response |
     return null; // Let the transport produce the proper parse error.
   }
   const messages: unknown[] = Array.isArray(body) ? body : [body];
-  if (messages.every(agentinCallIsAcceptable)) return null;
+  const text = !messages.every(agentinCallIsAcceptable) ? REJECTED : !messages.every(bookCallIsAcceptable) ? MALFORMED : null;
+  if (text === null) return null;
 
   const toolCalls = messages.filter((m) => isToolCall(m)) as { id?: unknown }[];
   const results = toolCalls.map((m) => ({
     jsonrpc: "2.0",
     id: m.id ?? null,
-    result: { content: [{ type: "text", text: REJECTED }], isError: true },
+    result: { content: [{ type: "text", text }], isError: true },
   }));
   return Response.json(Array.isArray(body) ? results : results[0]);
 }
