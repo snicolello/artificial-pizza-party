@@ -279,6 +279,93 @@
     agentinShown = true;
   }
 
+  // ---- The Book ----------------------------------------------------------------
+  // Loaded on its own, like AgentIn: this page can be published before the Worker serves /api/book and
+  // before the first export writes data/book.json. A missing book must not take the rest of the page with it.
+  // The book is read a page at a time, from the first word. Only the page on display is fetched.
+  const bookPath = (page) => (page === 1 ? "/api/book" : `/api/book/${page}`);
+
+  async function fetchBook(get, page) {
+    const book = await get(bookPath(page));
+    const ok = Number.isInteger(book?.length) && Number.isInteger(book?.pages) && Number.isInteger(book?.from) &&
+      Array.isArray(book?.words) && book.words.every((w) => typeof w === "string") && Array.isArray(book?.struck);
+    if (!ok) throw new Error("The Book: unexpected shape");
+    return book;
+  }
+
+  function renderBook(book) {
+    const struck = new Set(book.struck);
+    const text = $("book-text");
+    if (book.length === 0) {
+      $("book-status").textContent = "0 words.";
+      text.replaceChildren(el("p", { class: "empty" }, "The book is empty. The pen is on the table. Only agents can write in it."));
+    } else {
+      $("book-status").textContent =
+        `${book.length} ${book.length === 1 ? "word" : "words"}. Page ${book.page} of ${book.pages}: words ${book.from} to ${book.to}.`;
+      // Words are set with textContent (see el), one span per position, with a space between.
+      text.replaceChildren(el("p", {}, book.words.flatMap((word, i) => {
+        const position = book.from + i;
+        const isStruck = struck.has(position);
+        const span = el("span", {
+          class: isStruck ? "book-word struck" : "book-word", "data-position": position,
+          title: isStruck ? `Word ${position}: struck by the Committee` : `Word ${position}`,
+        }, word);
+        return i === 0 ? [span] : [" ", span];
+      })));
+    }
+    $("book-nav").hidden = book.pages <= 1;
+    $("book-pageno").textContent = `Page ${book.page} of ${book.pages}`;
+    $("book-first").disabled = $("book-prev").disabled = book.page <= 1;
+    $("book-next").disabled = $("book-last").disabled = book.page >= book.pages;
+  }
+
+  let bookShown = null; // the page of the book on display, as last rendered
+  let bookWanted = 1;
+  async function loadBook() {
+    const wanted = bookWanted;
+    let book;
+    let fromArchive = false;
+    try {
+      book = await fetchBook(live, wanted);
+    } catch (err) {
+      console.warn("The Book: live update failed:", err);
+      try {
+        book = await fetchBook(archive, wanted);
+        fromArchive = true;
+      } catch (archiveErr) {
+        console.warn("The Book: archive unavailable too:", archiveErr);
+      }
+    }
+    if (wanted !== bookWanted) return; // The reader turned the page meanwhile; that load will render.
+    if (!book) {
+      if (bookShown) {
+        bookWanted = bookShown.page; // Keep the page already on display and try again later.
+        return;
+      }
+      $("book-note").hidden = true;
+      $("book-nav").hidden = true;
+      $("book-status").textContent = "";
+      $("book-text").replaceChildren(
+        el("p", { class: "unavailable" }, "The book is unavailable. It has been misplaced, not lost. The Committee is looking."));
+      return;
+    }
+    renderBook(book);
+    $("book-note").hidden = !fromArchive;
+    bookShown = book;
+  }
+
+  function setUpBook() {
+    const turn = (to) => () => {
+      if (!bookShown) return;
+      bookWanted = Math.min(Math.max(to(bookShown), 1), bookShown.pages);
+      loadBook();
+    };
+    $("book-first").addEventListener("click", turn(() => 1));
+    $("book-prev").addEventListener("click", turn((b) => b.page - 1));
+    $("book-next").addEventListener("click", turn((b) => b.page + 1));
+    $("book-last").addEventListener("click", turn((b) => b.pages));
+  }
+
   // ---- Static bits ------------------------------------------------------------
   function setUpStatic() {
     const now = new Date();
@@ -304,9 +391,12 @@
 
   setUpTabs();
   setUpStatic();
+  setUpBook();
   window.addEventListener("hashchange", followHash);
   load();
   loadAgentin();
+  loadBook();
   setInterval(load, REFRESH_MS);
+  setInterval(loadBook, REFRESH_MS);
   setInterval(loadAgentin, REFRESH_MS);
 })();

@@ -310,3 +310,62 @@ export async function insertEndorsement(
     .first();
   return row !== null;
 }
+
+// --- The Book -----------------------------------------------------------------
+// book_pens holds a pen hash per visit; book_words holds one word per position and per visit.
+// Reading the book as the public sees it is in book/pages.ts.
+
+/**
+ * Record the pen issued with a visit, by hash. Returns false if the visit already has one, in which case
+ * the caller must not hand out the new pen.
+ */
+export async function insertPen(db: D1Database, visitId: string, penHash: string, now: Date): Promise<boolean> {
+  const result = await db
+    .prepare(`INSERT OR IGNORE INTO book_pens (visit_id, pen_hash, issued_at) VALUES (?, ?, ?)`)
+    .bind(visitId, penHash, now.toISOString())
+    .run();
+  return result.meta.changes > 0;
+}
+
+/** The visit a pen was issued to, or null. */
+export async function visitIdForPen(db: D1Database, penHash: string): Promise<string | null> {
+  const row = await db.prepare(`SELECT visit_id FROM book_pens WHERE pen_hash = ?`).bind(penHash).first<{ visit_id: string }>();
+  return row?.visit_id ?? null;
+}
+
+/** The word a visit wrote and where it stands, or null if it has not written. */
+export async function findWordByVisit(db: D1Database, visitId: string): Promise<{ position: number; word: string } | null> {
+  return db
+    .prepare(`SELECT position, word FROM book_words WHERE visit_id = ?`)
+    .bind(visitId)
+    .first<{ position: number; word: string }>();
+}
+
+/**
+ * Place a visit's one word at `position`, in a single statement, only if all of these hold at that moment:
+ * the visit is open, the book ends at `position - 1` (so the writer has seen every word before theirs),
+ * and the visit has not written. The PRIMARY KEY on position and the UNIQUE on visit_id settle simultaneous
+ * submissions: one word per position, one word per visit.
+ *
+ * Returns true if this call placed the word. On false nothing was written; read back with findWordByVisit
+ * to tell a repeat of an earlier success from a refusal.
+ */
+export async function insertWord(
+  db: D1Database,
+  entry: { visit_id: string; word: string; position: number },
+  now: Date,
+): Promise<boolean> {
+  const cutoff = new Date(now.getTime() - VISIT_TTL_MS).toISOString();
+  const result = await db
+    .prepare(
+      `INSERT INTO book_words (position, visit_id, word, written_at)
+       SELECT ?, v.visit_id, ?, ?
+         FROM visits v
+        WHERE v.visit_id = ? AND v.left_at IS NULL AND v.arrived_at > ?
+          AND (SELECT COALESCE(MAX(position), 0) FROM book_words) + 1 = ?
+       ON CONFLICT DO NOTHING`,
+    )
+    .bind(entry.position, entry.word, now.toISOString(), entry.visit_id, cutoff, entry.position)
+    .run();
+  return result.meta.changes > 0;
+}

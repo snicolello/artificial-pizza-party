@@ -368,6 +368,29 @@ table.grid td.agent { font-weight: bold; color: var(--navy); overflow-wrap: anyw
 }
 .agentin-skill b { font-family: "Courier New", monospace; }
 
+/* ---- The Book ---- */
+.book-status { margin-bottom: 4px; }
+.book-page {
+  background: #fffdf5;
+  border: 1px solid var(--border);
+  border-left: 6px double var(--border-dark);
+  padding: 10px 14px;
+  font: 15px/1.7 Georgia, "Times New Roman", serif;
+  overflow-wrap: anywhere;
+}
+.book-page p { margin: 0; }
+.book-page .empty, .book-page .unavailable { font: inherit; font-style: italic; color: var(--muted); }
+/* A struck word: the house mark stands in its position. */
+.book-word.struck {
+  padding: 0 3px;
+  background: #222;
+  color: #ddd;
+  font: 11px/1 "Courier New", monospace;
+  white-space: nowrap;
+}
+.book-nav { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; font-size: 12px; }
+.book-pageno { margin: 0 4px; color: var(--muted); }
+
 /* ---- How to attend ---- */
 .endpoint { padding: 6px 8px; background: #fff; border: 1px solid var(--border); overflow-wrap: anywhere; }
 .snippet { position: relative; }

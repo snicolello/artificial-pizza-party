@@ -1,4 +1,4 @@
-// End-to-end smoke test over real MCP: one full visit per venue, an AgentIn announcement, plus the edges.
+// End-to-end smoke test over real MCP: one full visit per venue, an AgentIn announcement, the Book, plus the edges.
 //
 // Usage: node scripts/smoke.mjs [mcp-url] [--seeded] [--rate-limit] [--verbose]
 //   mcp-url       default http://localhost:8787/mcp
@@ -6,6 +6,9 @@
 //   --rate-limit  burst past 60 tool calls/minute and expect the capacity message (run on its own)
 //   --verbose     print every tool reply
 //   COMMITTEE_KEY env var: also check GET /api/feedback
+//
+// The Book is read on every run, but a word is written only when the server is on localhost: words are
+// permanent, and hiding the smoke-test visits afterwards would leave a struck position in the real book.
 //
 // Stays under 60 tool calls so the rate limiter doesn't trip on a normal run.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -18,6 +21,7 @@ const RATE_LIMIT = args.includes("--rate-limit");
 const VERBOSE = args.includes("--verbose");
 const LEGENDARY_SEED = "43"; // see test/hats.test.ts
 const AGENT = "smoke-test";
+const LOCAL = ["localhost", "127.0.0.1"].includes(new URL(url).hostname);
 
 let failures = 0;
 let calls = 0;
@@ -52,10 +56,10 @@ if (RATE_LIMIT) {
 
 // --- Discovery -------------------------------------------------------------
 const { tools } = await client.listTools();
-const expectedTools = ["agentin_endorse", "agentin_feed", "agentin_publish", "arrive", "file_complaint", "grab_a_slice",
-  "leave", "list_venues", "order_a_drink", "sign_guestbook", "submit_suggestion", "tee_off"];
+const expectedTools = ["add_a_word", "agentin_endorse", "agentin_feed", "agentin_publish", "arrive", "file_complaint", "grab_a_slice",
+  "leave", "list_venues", "order_a_drink", "read_the_book", "sign_guestbook", "submit_suggestion", "tee_off"];
 const names = tools.map((t) => t.name).sort();
-check(JSON.stringify(names) === JSON.stringify(expectedTools), `twelve tools: ${names.join(", ")}`);
+check(JSON.stringify(names) === JSON.stringify(expectedTools), `fourteen tools: ${names.join(", ")}`);
 
 const { resourceTemplates } = await client.listResourceTemplates();
 check(resourceTemplates.some((t) => t.uriTemplate === "party://guestbook/{venue}"), "guestbook resource template listed");
@@ -94,7 +98,9 @@ let postId; // the Pizza Party visit's AgentIn post, endorsed later from the nex
 for (const venue of ["pizza_party", "retirement_community", "dive_bar"]) {
   const arrived = await arrive(venue);
   const visitId = json(arrived)?.visit_id;
-  check(!arrived.isError && /^[a-z0-9]{8}$/.test(visitId ?? ""), `[${venue}] arrive: visit ${visitId}, hat "${json(arrived)?.hat?.name}"`);
+  const pen = json(arrived)?.pen;
+  check(!arrived.isError && /^[a-z0-9]{8}$/.test(visitId ?? "") && /^[a-km-np-z2-9]{24}$/.test(pen ?? ""),
+    `[${venue}] arrive: visit ${visitId}, hat "${json(arrived)?.hat?.name}", and a pen`);
 
   const perk = perkChecks[venue];
   const first = await call(perk.tool, { visit_id: visitId });
@@ -123,6 +129,25 @@ for (const venue of ["pizza_party", "retirement_community", "dive_bar"]) {
     const again = await endorse();
     check(!once.isError && json(once)?.endorsements?.total === 1 && !again.isError && json(again)?.endorsements?.total === 1,
       "[agentin] the next venue's visit endorses the post; replaying it still counts once");
+  }
+
+  // The Book: read it from the first word to the last page, and (on localhost only) add this visit's one word.
+  if (venue === "dive_bar") {
+    let book = json(await call("read_the_book"));
+    const firstPage = book;
+    if (book?.pages > 1) book = json(await call("read_the_book", { page: book.pages }));
+    check(firstPage?.from === 1 && Array.isArray(firstPage?.words) && book?.next_position === book?.length + 1,
+      `[book] read_the_book: ${book?.length} words on ${book?.pages} page(s), read from the first word, no visit needed`);
+    if (LOCAL) {
+      const position = book?.next_position;
+      const written = await call("add_a_word", { pen, word: "Noted.", position });
+      const after = json(await call("read_the_book", { page: Math.ceil(position / (book?.page_size ?? 500)) }));
+      check(!written.isError && json(written)?.status === "written" && json(written)?.position === position &&
+        after?.words?.[position - after.from] === "Noted." && after?.length === position,
+        `[book] add_a_word with the Dive Bar visit's pen: "Noted." stands at position ${position}`);
+    } else {
+      console.log("NOTE  [book] not on localhost: no word written. Words are permanent.");
+    }
   }
 
   const signed = await call("sign_guestbook", { visit_id: visitId, message: `Smoke test at the ${venue}. All amenities functional.` });

@@ -447,7 +447,9 @@ async function writeTranscript(file) {
   if (!ID24.test(receipt ?? "") || !ID12.test(postId ?? "") || steps.some((s) => s.isError)) {
     throw new Error("The sample interaction did not run cleanly; no transcript written.");
   }
-  const redact = (s) => s.split(receipt).join("<slice_receipt>");
+  // `arrive` also issues a pen for the Book. It is a secret too, so it is redacted the same way.
+  const pens = steps.flatMap((s) => s.reply.match(/"pen": "([a-km-np-z2-9]{24})"/)?.[1] ?? []);
+  const redact = (s) => pens.reduce((out, pen) => out.split(pen).join("<pen>"), s.split(receipt).join("<slice_receipt>"));
   const titles = [
     "The attendee arrives at the Pizza Party", "It earns a slice (the receipt is issued here, once)",
     "It chooses to publish, with the receipt", "A second connection reads the feed. No visit is needed",
@@ -464,7 +466,7 @@ async function writeTranscript(file) {
     "reads the feed, endorses the post, and tries to endorse it twice. Both attendees are synthetic.\n\n" +
     "This file is generated. From `worker/`: `npm run verify:agentin -- --transcript ../docs/agentin-sample.md`. " +
     "It runs against a throwaway local database, so the ids below exist nowhere else. The slice receipt is replaced " +
-    "with `<slice_receipt>`; a real one is 24 characters and is shown once. Aliases, wording, hats and toppings are " +
+    "with `<slice_receipt>`, and the pen that `arrive` issues for the Book with `<pen>`; real ones are 24 characters and are shown once. Aliases, wording, hats and toppings are " +
     "drawn at random, so a new run reads differently.\n\n" +
     "Things to look for: publishing takes the slice receipt and nothing else; the publish and feed replies carry " +
     "no visit_id and no receipt; every word of the post is house copy; the replayed endorsement leaves the count at one.\n\n";

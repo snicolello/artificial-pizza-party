@@ -1,6 +1,7 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { agentinCallIsAcceptable, REJECTED } from "./agentin/input";
 import { handlePublicApi } from "./api";
+import { bookCallIsAcceptable, REJECTED as BOOK_REJECTED } from "./book/input";
 import type { Env } from "./context";
 import { listFeedback } from "./db";
 import { buildSnapshot, runExport } from "./export";
@@ -69,7 +70,9 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
   if (limited) return limited;
 
   // After the rate limiter, so a rejected call still counts as a call.
-  const rejected = await rejectMalformedAgentinCalls(request);
+  const rejected =
+    (await rejectMalformedCalls(request, agentinCallIsAcceptable, REJECTED)) ??
+    (await rejectMalformedCalls(request, bookCallIsAcceptable, BOOK_REJECTED));
   if (rejected) return rejected;
 
   const server = buildServer({ env, ipHash, now: () => new Date(), rand: requestRand(request, env) });
@@ -116,16 +119,21 @@ async function rateLimitToolCalls(request: Request, env: Env, ipHash: string): P
 }
 
 /**
- * AgentIn accepts only the fields in its input schemas. Most of that is enforced in the tool handlers, but
- * a field literally named "__proto__" is dropped by the SDK's parsing before a handler can see it. So the
- * raw body is checked here, where the keys are still as the caller sent them (see agentinCallIsAcceptable).
- * A malformed AgentIn call is answered with the fixed rejection and the server is not invoked.
+ * AgentIn and the Book accept only the fields in their input schemas. Most of that is enforced in the tool
+ * handlers, but a field literally named "__proto__" is dropped by the SDK's parsing before a handler can see
+ * it. So the raw body is checked here, where the keys are still as the caller sent them. The check runs once
+ * for each feature, with its own rule and its own fixed rejection (see agentinCallIsAcceptable and
+ * bookCallIsAcceptable). A malformed call is answered with that rejection and the server is not invoked.
  *
- * Batches: if any AgentIn call in a batch is malformed, nothing in the batch runs, and every `tools/call`
+ * Batches: if any such call in a batch is malformed, nothing in the batch runs, and every `tools/call`
  * in it gets the same rejection ("Nothing has been recorded" is then true of all of them). This is the
  * shape of the rate limiter's reply above: tool calls are answered, other messages in the batch are not.
  */
-async function rejectMalformedAgentinCalls(request: Request): Promise<Response | null> {
+async function rejectMalformedCalls(
+  request: Request,
+  isAcceptable: (message: unknown) => boolean,
+  rejection: string,
+): Promise<Response | null> {
   if (request.method !== "POST") return null;
   let body: unknown;
   try {
@@ -134,13 +142,13 @@ async function rejectMalformedAgentinCalls(request: Request): Promise<Response |
     return null; // Let the transport produce the proper parse error.
   }
   const messages: unknown[] = Array.isArray(body) ? body : [body];
-  if (messages.every(agentinCallIsAcceptable)) return null;
+  if (messages.every(isAcceptable)) return null;
 
   const toolCalls = messages.filter((m) => isToolCall(m)) as { id?: unknown }[];
   const results = toolCalls.map((m) => ({
     jsonrpc: "2.0",
     id: m.id ?? null,
-    result: { content: [{ type: "text", text: REJECTED }], isError: true },
+    result: { content: [{ type: "text", text: rejection }], isError: true },
   }));
   return Response.json(Array.isArray(body) ? results : results[0]);
 }
