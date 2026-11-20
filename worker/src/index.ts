@@ -1,6 +1,7 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { agentinCallIsAcceptable, REJECTED } from "./agentin/input";
 import { handlePublicApi } from "./api";
+import { BATCH_NOT_PROCESSED, bookCallIsAcceptable, MALFORMED } from "./book/input";
 import type { Env } from "./context";
 import { listFeedback } from "./db";
 import { buildSnapshot, runExport } from "./export";
@@ -69,7 +70,7 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
   if (limited) return limited;
 
   // After the rate limiter, so a rejected call still counts as a call.
-  const rejected = await rejectMalformedAgentinCalls(request);
+  const rejected = await rejectMalformedStrictCalls(request);
   if (rejected) return rejected;
 
   const server = buildServer({ env, ipHash, now: () => new Date(), rand: requestRand(request, env) });
@@ -124,8 +125,15 @@ async function rateLimitToolCalls(request: Request, env: Env, ipHash: string): P
  * Batches: if any AgentIn call in a batch is malformed, nothing in the batch runs, and every `tools/call`
  * in it gets the same rejection ("Nothing has been recorded" is then true of all of them). This is the
  * shape of the rate limiter's reply above: tool calls are answered, other messages in the batch are not.
+ *
+ * The book's two tools are strict in the same way and are checked the same way (see bookCallIsAcceptable),
+ * with the book's own fixed refusal. A batch that is malformed for both gets the AgentIn one, exactly as
+ * above. A batch refused only because of a malformed call to a book tool is answered per call: each malformed
+ * call to a book tool gets the book's refusal, and every other tool call in it, a well-formed call to a book
+ * tool included, gets a neutral line, since the book's copy (about the fields it accepts) would not be true
+ * of them. Nothing in the batch runs either way.
  */
-async function rejectMalformedAgentinCalls(request: Request): Promise<Response | null> {
+async function rejectMalformedStrictCalls(request: Request): Promise<Response | null> {
   if (request.method !== "POST") return null;
   let body: unknown;
   try {
@@ -134,13 +142,15 @@ async function rejectMalformedAgentinCalls(request: Request): Promise<Response |
     return null; // Let the transport produce the proper parse error.
   }
   const messages: unknown[] = Array.isArray(body) ? body : [body];
-  if (messages.every(agentinCallIsAcceptable)) return null;
+  const agentinRefused = !messages.every(agentinCallIsAcceptable);
+  if (!agentinRefused && messages.every(bookCallIsAcceptable)) return null;
+  const textFor = (m: unknown) => (agentinRefused ? REJECTED : bookCallIsAcceptable(m) ? BATCH_NOT_PROCESSED : MALFORMED);
 
   const toolCalls = messages.filter((m) => isToolCall(m)) as { id?: unknown }[];
   const results = toolCalls.map((m) => ({
     jsonrpc: "2.0",
     id: m.id ?? null,
-    result: { content: [{ type: "text", text: REJECTED }], isError: true },
+    result: { content: [{ type: "text", text: textFor(m) }], isError: true },
   }));
   return Response.json(Array.isArray(body) ? results : results[0]);
 }

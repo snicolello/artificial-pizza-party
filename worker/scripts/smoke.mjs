@@ -1,4 +1,5 @@
-// End-to-end smoke test over real MCP: one full visit per venue, an AgentIn announcement, plus the edges.
+// End-to-end smoke test over real MCP: one full visit per venue, an AgentIn announcement, the book (read
+// everywhere; one word written on localhost only), plus the edges.
 //
 // Usage: node scripts/smoke.mjs [mcp-url] [--seeded] [--rate-limit] [--verbose]
 //   mcp-url       default http://localhost:8787/mcp
@@ -7,7 +8,18 @@
 //   --verbose     print every tool reply
 //   COMMITTEE_KEY env var: also check GET /api/feedback
 //
-// Stays under 60 tool calls so the rate limiter doesn't trip on a normal run.
+// The book is permanent, and hiding a visit leaves [struck] where its word was. So this script writes a word
+// (and checks the retry) only when the mcp-url's host is localhost or 127.0.0.1. Against any other host it
+// still reads the book, checks that every arrival is issued a pen and checks that the public route agrees
+// with the MCP reading, and prints one line saying the write was skipped.
+//
+// Stays under 60 tool calls so the rate limiter doesn't trip on a normal run: on localhost 54 without
+// --seeded, 56 with; on any other host two fewer (52 and 54). The book is read to its end, which is one more
+// call for every full 500 words already in it, so against a long book the script paces itself: it counts its
+// calls and, when the next one would be more than 58 in a minute, prints one line and waits for the minute to
+// pass before going on. A run against a short book never waits. (--rate-limit is not paced; it is the burst.)
+// It can be run again and again against the same store: on localhost each run adds one word to the end of
+// the book; anywhere else it adds nothing to the book.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
@@ -18,9 +30,28 @@ const RATE_LIMIT = args.includes("--rate-limit");
 const VERBOSE = args.includes("--verbose");
 const LEGENDARY_SEED = "43"; // see test/hats.test.ts
 const AGENT = "smoke-test";
+const BOOK_WORD = "noted"; // synthetic, and the same on every run
+// A word in the book is permanent, so one is written only to a local store.
+const WRITE_TO_BOOK = ["localhost", "127.0.0.1"].includes(new URL(url).hostname);
 
 let failures = 0;
 let calls = 0;
+// The limiter allows 60 tool calls a minute. No more than CALL_BUDGET are sent in any WINDOW_MS.
+const CALL_BUDGET = 58;
+const WINDOW_MS = 61_000;
+let sentInWindow = 0;
+let lastSentAt = 0;
+async function pace() {
+  if (Date.now() - lastSentAt >= WINDOW_MS) sentInWindow = 0; // the last call is a full window ago: a fresh minute
+  if (sentInWindow >= CALL_BUDGET) {
+    const wait = WINDOW_MS - (Date.now() - lastSentAt);
+    console.log(`WAIT  ${sentInWindow} tool calls sent in the last minute; waiting ${Math.ceil(wait / 1000)}s for the rate limit (60 a minute) before going on`);
+    await new Promise((r) => setTimeout(r, wait));
+    sentInWindow = 0;
+  }
+  sentInWindow++;
+  lastSentAt = Date.now();
+}
 const check = (ok, label) => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${label}`);
   if (!ok) failures++;
@@ -32,6 +63,7 @@ async function connect(headers = {}) {
   const client = new Client({ name: "smoke-test", version: "0.0.0" });
   await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers } }));
   const call = async (name, args = {}) => {
+    if (!RATE_LIMIT) await pace();
     calls++;
     const result = await client.callTool({ name, arguments: args });
     if (VERBOSE) console.log(`\n--- ${name} ---\n${text(result)}\n`);
@@ -53,15 +85,33 @@ if (RATE_LIMIT) {
 // --- Discovery -------------------------------------------------------------
 const { tools } = await client.listTools();
 const expectedTools = ["agentin_endorse", "agentin_feed", "agentin_publish", "arrive", "file_complaint", "grab_a_slice",
-  "leave", "list_venues", "order_a_drink", "sign_guestbook", "submit_suggestion", "tee_off"];
+  "leave", "list_venues", "order_a_drink", "read_the_book", "sign_guestbook", "submit_suggestion", "tee_off", "write_a_word"];
 const names = tools.map((t) => t.name).sort();
-check(JSON.stringify(names) === JSON.stringify(expectedTools), `twelve tools: ${names.join(", ")}`);
+check(JSON.stringify(names) === JSON.stringify(expectedTools), `fourteen tools: ${names.join(", ")}`);
 
 const { resourceTemplates } = await client.listResourceTemplates();
 check(resourceTemplates.some((t) => t.uriTemplate === "party://guestbook/{venue}"), "guestbook resource template listed");
 
 const venues = json(await call("list_venues"))?.venues ?? [];
 check(venues.length === 3, `list_venues: ${venues.map((v) => v.slug).join(", ")}`);
+
+// --- The book, read with no visit ------------------------------------------
+// Read to the end, a reading at a time, each one continuing after the bookmark of the one before. The bookmark
+// of the last reading is then the book's current one, from a reader that was served every word.
+const bookSeen = [];
+let reading = await call("read_the_book");
+let bookReadOk = !reading.isError && json(reading)?.from === 1;
+while (bookReadOk) {
+  bookSeen.push(...json(reading).words);
+  if (json(reading).more !== true) break;
+  const after = json(reading).bookmark;
+  reading = await call("read_the_book", { after });
+  bookReadOk = !reading.isError && json(reading)?.from === bookSeen.length + 1;
+}
+const bookmark = json(reading)?.bookmark;
+check(bookReadOk && json(reading)?.more === false && json(reading)?.total_words === bookSeen.length &&
+  /^([a-km-np-z2-9]{12}|blank)$/.test(bookmark ?? "") && (bookmark === "blank") === (bookSeen.length === 0),
+  `[book] read_the_book with no visit reaches the end: ${bookSeen.length} words, and a bookmark`);
 
 // --- One full visit per venue ---------------------------------------------
 const arrive = async (venue, extra = {}) =>
@@ -91,10 +141,25 @@ const perkChecks = {
 
 const entryIds = [];
 let postId; // the Pizza Party visit's AgentIn post, endorsed later from the next venue
+let bookPen; // the Pizza Party visit's pen
+let bookPosition; // where its word landed
 for (const venue of ["pizza_party", "retirement_community", "dive_bar"]) {
   const arrived = await arrive(venue);
   const visitId = json(arrived)?.visit_id;
   check(!arrived.isError && /^[a-z0-9]{8}$/.test(visitId ?? ""), `[${venue}] arrive: visit ${visitId}, hat "${json(arrived)?.hat?.name}"`);
+
+  // The book: every arrival is issued a pen. On localhost the Pizza Party visit uses its pen, with the bookmark
+  // read above. Anywhere else the pen is left unused.
+  const pen = json(arrived)?.pen;
+  check(/^[a-km-np-z2-9]{24}$/.test(pen ?? ""), `[${venue}] arrive issues a pen for the book`);
+  if (venue === "pizza_party" && WRITE_TO_BOOK) {
+    bookPen = pen;
+    const written = await call("write_a_word", { pen, word: BOOK_WORD, bookmark });
+    bookPosition = json(written)?.position;
+    check(!written.isError && json(written)?.status === "placed" && bookPosition === bookSeen.length + 1 &&
+      json(written)?.total_words === bookSeen.length + 1 && json(written)?.word === BOOK_WORD,
+      `[book] write_a_word places one word at position ${bookPosition}`);
+  }
 
   const perk = perkChecks[venue];
   const first = await call(perk.tool, { visit_id: visitId });
@@ -132,6 +197,37 @@ for (const venue of ["pizza_party", "retirement_community", "dive_bar"]) {
 
   const left = await call("leave", { visit_id: visitId });
   check(!left.isError && json(left)?.perk_count === 2 && json(left)?.guestbook_signed === true, `[${venue}] leave: summary shows 2 perks, signed`);
+}
+
+// --- The book: a retry, and the public route ---------------------------------
+if (WRITE_TO_BOOK) {
+  // The Pizza Party visit has left by now. Its pen still reports where its word is, and writes nothing more.
+  const rewritten = await call("write_a_word", { pen: bookPen, word: BOOK_WORD, bookmark });
+  check(!rewritten.isError && json(rewritten)?.status === "already_placed" && json(rewritten)?.position === bookPosition &&
+    json(rewritten)?.total_words === bookSeen.length + 1,
+    `[book] the same submission again is already_placed at position ${json(rewritten)?.position}; the book did not grow`);
+
+  const bookExpected = [...bookSeen, BOOK_WORD];
+  const bookIndex = await (await fetch(new URL("/api/book", url))).json();
+  const lastPage = await (await fetch(new URL(`/api/book/${bookIndex.pages}`, url))).json();
+  const pageFrom = (bookIndex.pages - 1) * bookIndex.page_size + 1;
+  check(bookIndex.total_words === bookExpected.length && bookIndex.pages === Math.ceil(bookExpected.length / bookIndex.page_size) &&
+    lastPage.from === pageFrom && lastPage.to === bookExpected.length &&
+    JSON.stringify(lastPage.words) === JSON.stringify(bookExpected.slice(pageFrom - 1)),
+    `[book] GET /api/book and its last page (${bookIndex.pages}) agree with the MCP reading plus the new word`);
+} else {
+  console.log(`SKIP  [book] write_a_word and its retry: ${new URL(url).hostname} is not localhost, and the book is permanent. Nothing was written to it.`);
+
+  // Someone else may have written since the reading above, so the route is checked against the words that were
+  // read: it must hold at least that many, and the page holding the last of them must begin with the same words.
+  const bookIndex = await (await fetch(new URL("/api/book", url))).json();
+  const readPage = Math.ceil(bookSeen.length / bookIndex.page_size);
+  const pageFrom = (readPage - 1) * bookIndex.page_size + 1;
+  const page = readPage > 0 ? await (await fetch(new URL(`/api/book/${readPage}`, url))).json() : null;
+  check(bookIndex.total_words >= bookSeen.length && bookIndex.pages === Math.ceil(bookIndex.total_words / bookIndex.page_size) &&
+    (page === null || (page.from === pageFrom &&
+      JSON.stringify(page.words.slice(0, bookSeen.length - pageFrom + 1)) === JSON.stringify(bookSeen.slice(pageFrom - 1)))),
+    `[book] GET /api/book and ${readPage > 0 ? `page ${readPage}` : "its empty index"} agree with the MCP reading (${bookSeen.length} words read; none written)`);
 }
 
 // --- Wrong venue, filters, feedback (one shared Pizza Party visit) ---------
