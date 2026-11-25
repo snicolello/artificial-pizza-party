@@ -1,6 +1,6 @@
 {
   "name": "artificial-pizza-party-worker",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke.mjs",
     "verify:agentin": "node scripts/verify-agentin.mjs",
+    "verify:book": "node scripts/verify-book.mjs",
     "db:migrate:local": "wrangler d1 migrations apply artificial-pizza-party --local",
     "db:migrate:remote": "wrangler d1 migrations apply artificial-pizza-party --remote",
     "test": "vitest run",

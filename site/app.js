@@ -279,6 +279,137 @@
     agentinShown = true;
   }
 
+  // ---- The book --------------------------------------------------------------
+  // Loaded on its own, like AgentIn, for the same reason: this page can be published before the Worker
+  // serves /api/book and before the first export writes data/book.json.
+  // The book is served in pages. The reader starts with page 1 and opens further pages with the button;
+  // every refresh re-reads the index and every opened page, because a word can be struck anywhere.
+  const isCount = (n) => Number.isInteger(n) && n >= 0;
+
+  /** Read the index and the first `wanted` pages from one source. Throws unless all of it is well formed. */
+  async function fetchBook(get, wanted) {
+    const index = await get("/api/book");
+    const ok = isCount(index?.total_words) && isCount(index.pages) && isCount(index.page_size) &&
+      index.page_size > 0 && typeof index.house_mark === "string";
+    if (!ok) throw new Error("Book index: unexpected shape");
+
+    const shown = Math.min(Math.max(wanted, 1), index.pages);
+    const pages = await Promise.all(Array.from({ length: shown }, (_, i) => get(`/api/book/${i + 1}`)));
+    const words = [];
+    pages.forEach((p, i) => {
+      const from = i * index.page_size + 1;
+      const okPage = p?.page === i + 1 && p.from === from &&
+        Array.isArray(p.words) && p.words.every((w) => typeof w === "string") &&
+        p.words.length >= 1 && p.words.length <= index.page_size && p.to === from + p.words.length - 1 &&
+        (i === shown - 1 || p.words.length === index.page_size) && // No gaps between opened pages.
+        Array.isArray(p.struck_positions) && p.struck_positions.every(Number.isInteger);
+      if (!okPage) throw new Error(`Book page ${i + 1}: unexpected shape`);
+      const struck = new Set(p.struck_positions);
+      p.words.forEach((w, k) => {
+        const isStruck = struck.has(from + k);
+        words.push({ text: isStruck ? index.house_mark : w, struck: isStruck });
+      });
+    });
+    // The index and the pages are separate requests; a word may have arrived in between.
+    const total = Math.max(index.total_words, words.length);
+    return { words, total, shown, pageSize: index.page_size, pages: Math.max(index.pages, Math.ceil(total / index.page_size)) };
+  }
+
+  function bookWord(word, position) {
+    const span = el("span", { class: "book-word", "data-position": position }, word.text);
+    markStruck(span, word.struck);
+    return span;
+  }
+
+  function markStruck(span, struck) {
+    span.classList.toggle("book-struck", struck);
+    for (const attr of ["title", "aria-label"]) {
+      if (struck) span.setAttribute(attr, "struck from the record");
+      else span.removeAttribute(attr);
+    }
+  }
+
+  function renderBook(book) {
+    const text = $("book-text");
+    $("book-count").textContent = `(${book.total} ${book.total === 1 ? "word" : "words"} to date)`;
+
+    if (book.words.length === 0) {
+      text.replaceChildren(el("p", { class: "empty" }, "The book is blank. The first word is pending."));
+    } else {
+      // Update in place and append, so a refresh does not disturb a reader's place or selection.
+      let spans = text.querySelectorAll(".book-word");
+      if (spans.length === 0 || spans.length > book.words.length) {
+        text.replaceChildren();
+        spans = [];
+      }
+      const added = [];
+      book.words.forEach((word, i) => {
+        const span = spans[i];
+        if (!span) {
+          if (i > 0) added.push(" ");
+          added.push(bookWord(word, i + 1));
+        } else if (span.textContent !== word.text || span.classList.contains("book-struck") !== word.struck) {
+          span.textContent = word.text;
+          markStruck(span, word.struck);
+        }
+      });
+      text.append(...added);
+    }
+
+    const more = $("book-more");
+    more.hidden = book.shown >= book.pages;
+    if (!more.hidden) {
+      const from = book.shown * book.pageSize + 1;
+      const to = Math.min(book.total, (book.shown + 1) * book.pageSize);
+      more.textContent = `Read on (words ${from} to ${to})`;
+    }
+  }
+
+  let bookShown = false;
+  let bookPagesShown = 1; // Pages on the page now.
+  let bookPagesWanted = 1; // Pages the reader has asked for. Kept across refreshes.
+  let bookRequest = 0;
+  async function loadBook() {
+    const request = ++bookRequest;
+    let book;
+    let fromArchive = false;
+    try {
+      book = await fetchBook(live, bookPagesWanted);
+    } catch (err) {
+      console.warn("Book live update failed:", err);
+      try {
+        book = await fetchBook(archive, bookPagesWanted);
+        fromArchive = true;
+      } catch (archiveErr) {
+        console.warn("Book archive unavailable too:", archiveErr);
+      }
+    }
+    if (request !== bookRequest) return; // A newer request is on its way; let it decide what is shown.
+    $("book-more").disabled = false;
+    if (!book) {
+      bookPagesWanted = bookPagesShown;
+      if (bookShown) return; // Keep the book already on the page and try again later.
+      $("book-note").hidden = true;
+      $("book-more").hidden = true;
+      $("book-count").textContent = "";
+      $("book-text").replaceChildren(
+        el("p", { class: "unavailable" }, "The book is unavailable. It has not been lost. The Committee is aware."));
+      return;
+    }
+    renderBook(book);
+    $("book-note").hidden = !fromArchive;
+    bookPagesShown = bookPagesWanted = Math.max(book.shown, 1);
+    bookShown = true;
+  }
+
+  function setUpBook() {
+    $("book-more").addEventListener("click", () => {
+      bookPagesWanted = bookPagesShown + 1;
+      $("book-more").disabled = true;
+      loadBook();
+    });
+  }
+
   // ---- Static bits ------------------------------------------------------------
   function setUpStatic() {
     const now = new Date();
@@ -305,8 +436,11 @@
   setUpTabs();
   setUpStatic();
   window.addEventListener("hashchange", followHash);
+  setUpBook();
   load();
   loadAgentin();
+  loadBook();
   setInterval(load, REFRESH_MS);
   setInterval(loadAgentin, REFRESH_MS);
+  setInterval(loadBook, REFRESH_MS);
 })();

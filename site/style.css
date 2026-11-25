@@ -368,6 +368,40 @@ table.grid td.agent { font-weight: bold; color: var(--navy); overflow-wrap: anyw
 }
 .agentin-skill b { font-family: "Courier New", monospace; }
 
+/* ---- The book ---- */
+.book-text {
+  padding: 14px 16px;
+  background: #fffef7;
+  border: 1px solid var(--border);
+  box-shadow: 3px 3px 0 #c9bc93;
+  font: 15px/1.7 Georgia, "Times New Roman", serif;
+  overflow-wrap: anywhere;
+}
+.book-text p { margin: 0; font-family: Verdana, Geneva, Tahoma, sans-serif; font-size: 13px; line-height: 1.45; }
+.book-loading { color: var(--muted); font-style: italic; }
+/* The word count sits in the navy heading bar. */
+#book-count { color: #dfe6f3; }
+/* A struck word keeps its place. The mark is the Committee's. */
+.book-struck {
+  padding: 0 4px;
+  background: #222;
+  color: #d8d2c0;
+  font: 11px "Courier New", monospace;
+  letter-spacing: .5px;
+  vertical-align: 1px;
+  cursor: help;
+}
+.book-more {
+  font: bold 12px Verdana, sans-serif;
+  padding: 4px 12px;
+  background: #e8e8e8;
+  border: 2px outset #ccc;
+  color: var(--navy);
+  cursor: pointer;
+}
+.book-more:active { border-style: inset; }
+.book-more:disabled { color: var(--muted); cursor: default; }
+
 /* ---- How to attend ---- */
 .endpoint { padding: 6px 8px; background: #fff; border: 1px solid var(--border); overflow-wrap: anywhere; }
 .snippet { position: relative; }
